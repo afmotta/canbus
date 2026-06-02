@@ -23,6 +23,11 @@ logger:
   baud_rate: 0
   level: DEBUG
 
+# --------------- Network: WiFi ---------------
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
 # --------------- Home Assistant API ---------------
 api:
   password: !secret ha_api_key

@@ -148,7 +148,7 @@ review
 
 ### Decision-Needed Items
 
-- [ ] [Review][Decision] Missing network transport layer — Gateway API component is configured but no network connectivity (Ethernet removed for RS485-CAN switch; WiFi not added). Original gateway had Ethernet configured. Dev Notes require "ESPHome native API over Ethernet (PoE) or WiFi". Question: Should WiFi configuration be added to this base story, or is network transport deferred to a separate story? [firmware/gateway.yaml:esphome]
+- [x] [Review][Decision] Missing network transport layer — ✅ **RESOLVED: Added WiFi configuration**. Gateway now includes `wifi: ssid/password` from secrets for network connectivity. Addresses Dev Notes requirement: "ESPHome native API over Ethernet (PoE) or WiFi". WiFi chosen for RS485-CAN hardware (no built-in Ethernet). [firmware/gateway.yaml:25-27]
 
 ### Patch Items (Fixable)
 
