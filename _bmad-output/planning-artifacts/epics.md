@@ -342,7 +342,7 @@ So that node aliveness is observable from the gateway without requiring HA acces
 **Given** the gateway compiles with the CAT_INPUT handler (Story 3.2)
 **When** a CAT_STATUS frame is received (`can_id: 0x600`, `can_id_mask: 0x600`)
 **Then** the `on_frame` lambda begins with `if (x.size() < CAN_FRAME_SIZE) return;` (NFR-2)
-**And** for a valid frame, the lambda logs at minimum: room_id (byte 5), board_id (byte 6), uptime hours (byte 2), and error flags (byte 4)
+**And** for a valid frame, the lambda logs at minimum: uptime hours (byte 2), error flags (byte 3), room_id (byte 4), and board_id (byte 5) — byte positions per `canbus_protocol.h` (the single source of truth); decode via the named `payload_*` helpers, not raw indices
 **And** no `esphome.canbus_heartbeat` HA event is fired — logging only in PoC (FR-6.2)
 **And** the log message is distinct enough to confirm the full decode ran (not just "heartbeat received")
 **And** `esphome compile firmware/gateway.yaml` completes successfully with both handlers present

@@ -129,7 +129,7 @@ any PoC firmware is compiled.
 
 **Critical Decisions (Block Implementation):**
 
-- Single-lambda HA event firing (no global staging) — affects all gateway on_frame handlers
+- HA event firing via `homeassistant.event:` YAML action, no global staging — affects all gateway on_frame handlers
 - Node ID space allocation — affects nodes.csv schema and all future provisioning
 - canbus_protocol.h retained — affects ESPHome includes config in every YAML file
 - Firmware directory restructure — must precede any compile
@@ -151,15 +151,17 @@ any PoC firmware is compiled.
 ### Protocol & State Management
 
 **Global staging: eliminated.**
-The gateway fires Home Assistant events directly from within a single `lambda:` action
-using the ESPHome internal API (`api::global_api_server->send_homeassistant_service_call`).
-Lambda-local variables decoded from the CAN frame are passed directly to the API call
-without staging through ESPHome globals.
+The gateway fires Home Assistant events using the ESPHome `homeassistant.event:` YAML
+action, guarded by an `if:` / `condition:` block. Each event-data field is a `!lambda`
+that decodes directly from the CAN frame (`x`) via the `canbus_protocol.h` helpers — no
+values are staged through ESPHome globals.
 
-Rationale: cleaner implementation, fewer moving parts. Risk: uses ESPHome internal C++
-API rather than the documented YAML action. Mitigated by pinning ESPHome version before
-first compile and treating version upgrades as requiring re-validation of the gateway
-on_frame handler.
+Rationale: the `homeassistant.event:` action is documented, stable across ESPHome
+versions, and matches the project's `on_frame` guard convention (clean action lambdas,
+validity checks in the `condition:`). An earlier design mandated a single-lambda direct
+internal-API call (`api::global_api_server->send_homeassistant_action`); that was reversed
+on 2026-06-02 (Alberto) because the internal API is undocumented and version-coupled,
+whereas the YAML action carries neither risk while still avoiding global staging.
 
 **Node ID space allocation:**
 
@@ -242,7 +244,7 @@ subsequent compiles use the pinned version.
 
 - `canbus_protocol.h` is a compile-time dependency of both node and gateway firmware. Any change requires recompiling both.
 - `nodes.csv` schema change requires updating `generate_nodes.py` template and regenerating all node configs.
-- Single-lambda API call approach on gateway requires ESPHome version to be pinned before first compile and re-validated on any version upgrade.
+- Gateway HA event firing uses the documented `homeassistant.event:` YAML action; ESPHome version is still pinned after first compile for reproducibility, but no internal-API re-validation is required on upgrade.
 - Node ID range allocation is permanent — collisions require reflashing affected nodes.
 
 ## Implementation Patterns & Consistency Rules
@@ -302,9 +304,10 @@ if (x[3] == 1) evt = "click";    // magic number
 
 ### Gateway on_frame Handler Pattern
 
-The gateway uses a single `lambda:` action per frame category. Home Assistant events
-are fired via the ESPHome internal API directly from within the lambda — no globals,
-no multi-action sequences.
+Each gateway frame category is one `on_frame` filter entry. Payload validity is checked
+in an `if:` / `condition:` lambda; the action branch logs (NFR-8) and, for button frames,
+fires `esphome.canbus_button` via the `homeassistant.event:` action. No globals, no value
+staging between actions.
 
 **Structure:**
 
@@ -313,20 +316,22 @@ on_frame:
   - can_id: 0x200
     can_id_mask: 0x600
     then:
-      - lambda: |-
-          if (x.size() < CAN_FRAME_SIZE) return;
-          if (x[0] != PROTO_V1) return;
-          // decode fields as local variables
-          // fire HA event via api::global_api_server
+      - if:
+          condition:
+            lambda: 'if (x.size() < CAN_FRAME_SIZE) return false; return x[0] == PROTO_V1;'
+          then:
+            - lambda: |-
+                ESP_LOGI("gw", ...);   // log decoded values first (NFR-8)
+            - homeassistant.event:
+                event: esphome.canbus_button
+                data:                  // each field a !lambda decoding from x; all values strings
+                  room: !lambda 'return to_string(payload_room(x));'
+                  # board / button / event likewise
 ```
 
-**⚠️ Implementation note:** The exact C++ API for `api::global_api_server->...`
-must be verified against the pinned ESPHome version before implementation. The pattern
-above is the architectural intent; the specific method names in the ESPHome API layer
-may differ. Check the ESPHome source for the pinned version before writing this lambda.
-
-One `on_frame` handler per CAN category: one for `CAT_INPUT` (button events), one
-for `CAT_STATUS` (heartbeat — log only in PoC).
+The size guard `if (x.size() < CAN_FRAME_SIZE) return false;` is the first statement of the
+`condition:` lambda — before any byte is indexed. One `on_frame` handler per CAN category:
+CAT_INPUT (button events → HA) and CAT_STATUS (heartbeat — log only in PoC).
 
 ### ESPHome Globals Usage Rule
 
@@ -338,7 +343,8 @@ decisions). Globals are still permitted for:
 
 An ESPHome global should never be introduced solely to pass a value from one action
 to the next within a single `on_frame` handler. If that pattern appears, replace it
-with the single-lambda approach.
+by decoding directly from `x` in each `!lambda` (e.g. per-field in the
+`homeassistant.event:` data block).
 
 ### YAML Structure Conventions
 
@@ -406,14 +412,13 @@ outside 0–399 or duplicates.
 
 - Read `canbus_protocol.h` before writing any lambda that constructs or decodes a CAN frame
 - Check `firmware/nodes.csv` before assigning a new node ID
-- Verify `x.size() < CAN_FRAME_SIZE` is the first line of every `on_frame` lambda
-- Use the single-lambda pattern on the gateway — never introduce globals for event staging
+- Verify `x.size() < CAN_FRAME_SIZE` is the first check before any payload byte is accessed (first line of the lambda for nodes; first statement of the `condition:` lambda for the gateway)
+- On the gateway, fire HA events via the `homeassistant.event:` action with `if:`/`condition:` guards — never introduce globals for event staging
 - Compile with `esphome compile` before reporting a task complete; a failed compile is not a completed story
 
 **Anti-patterns to flag in review:**
 
 - Raw hex or bit shifts in YAML lambdas (use protocol header)
-- `homeassistant.event:` YAML action used on gateway (use single-lambda direct API call)
 - Any hand-edit of files under `firmware/nodes/`
 - `x.size() == 0` or `x.empty()` as the frame guard (wrong bound)
 - ESPHome global introduced solely for event staging
@@ -508,10 +513,10 @@ MCP2515 SPI0 → CAN bus 125 kbps
   ↓
 ESP32-S3 TWAI receiver
   ↓
-on_frame lambda [ firmware/gateway.yaml ]
-  if (x.size() < CAN_FRAME_SIZE) return
+on_frame if:/condition: guard [ firmware/gateway.yaml ]
+  if (x.size() < CAN_FRAME_SIZE) return false; x[0] == PROTO_V1
   decode: room=x[4], board=x[5], button=x[2], event=event_type_str(x[3])
-  api::global_api_server → esphome.canbus_button
+  homeassistant.event: esphome.canbus_button (per-field !lambda)
   ↓
 WiFi → Home Assistant native API
   ↓
@@ -552,7 +557,7 @@ esphome upload nodes/node100.yaml    # flash node via USB
 **Decision Compatibility:** All decisions are mutually compatible.
 
 - ESPHome rp2040 (nodes) and esp-idf (gateway) are independently configured — no shared platform block conflicts.
-- Single-lambda direct API call is structurally consistent with eliminating globals.
+- The `homeassistant.event:` action with per-field `!lambda` decode is structurally consistent with eliminating globals.
 - `canbus_protocol.h` inclusion is compile-time only; no runtime cross-platform issues.
 - Node ID ranges (100-399) fit within the 9-bit CAN ID space (0-511).
 
@@ -576,7 +581,7 @@ distinguished. Boundaries are non-overlapping.
 | FR-3: Heartbeat | `firmware/common/base_node.yaml` |
 | FR-4: Protocol header | `firmware/common/canbus_protocol.h` |
 | FR-5: Gateway CAN reception | `firmware/gateway.yaml` on_frame pattern |
-| FR-6: Gateway HA forwarding | Single-lambda direct API call in `gateway.yaml` |
+| FR-6: Gateway HA forwarding | `homeassistant.event:` action in `gateway.yaml` on_frame |
 | FR-7: Gateway connectivity | `firmware/secrets.yaml` + WiFi ESPHome config |
 | FR-8: Code generation | `firmware/generate_nodes.py` + `firmware/nodes.csv` |
 | FR-9: Validation criteria | PoC sign-off criteria (10 combinations + logged artifacts) |
@@ -605,7 +610,7 @@ listed for code review. Enforcement guidelines are specific and actionable.
 - `CAN_FRAME_SIZE = 8` constant does not yet exist in `canbus_protocol.h`. Must be added as part of Story 2 (protocol header implementation). Referenced by the lambda safety pattern — agents must add it before writing any on_frame handler.
 - PoC bench node IDs should be explicitly assigned: node 100 and node 101 (ground floor range). The `nodes.csv` for the PoC should use these IDs.
 - Hardware open questions (OQ-1, OQ-2, OQ-3) must be resolved from physical board documentation before any firmware compiles. These are pre-implementation gates, not architectural gaps.
-- Exact ESPHome C++ API for direct HA event firing (`api::global_api_server->...`) must be verified against pinned ESPHome source before gateway lambda is written. The pattern is specified; the method signatures require version-specific lookup.
+- Gateway HA event firing uses the documented `homeassistant.event:` YAML action (decision reversed 2026-06-02 from the earlier `api::global_api_server` internal-API approach). No version-specific C++ API lookup required.
 
 **Deferred (accepted):**
 
