@@ -152,11 +152,11 @@ review
 
 ### Patch Items (Fixable)
 
-- [ ] [Review][Patch] Lambda variable scope vulnerability in homeassistant.event — Event data block calls `payload_room(x)`, `payload_board(x)`, `payload_button_index(x)`, `payload_event_type(x)` multiple times. If payload extraction functions have side effects or x is mutated between calls, event fires with wrong values. **Fix:** Cache all extracted values in local variables before event block. [firmware/gateway.yaml:99-102]
+- [x] [Review][Patch] Lambda variable scope vulnerability — ✅ **FIXED**. Restored globals for staging event data (evt_room, evt_board, evt_button, evt_type). CAT_INPUT handler now stages all values to globals before homeassistant.event block, eliminating risk of multiple payload function calls returning stale/divergent values. [firmware/gateway.yaml:72-97, 119-133]
 
-- [ ] [Review][Patch] ERR_NONE constant undefined — Heartbeat handler compares `hb_errors != ERR_NONE` but constant may not be defined in canbus_protocol.h, causing build failure. **Fix:** Verify ERR_NONE exists in canbus_protocol.h; add if missing: `constexpr uint8_t ERR_NONE = 0x00;` [firmware/gateway.yaml:115]
+- [x] [Review][Patch] ERR_NONE constant undefined — ✅ **VERIFIED PRESENT**. Constant already defined in canbus_protocol.h line 67: `inline constexpr uint8_t ERR_NONE = 0x00;`. Heartbeat handler correctly references it. [firmware/common/canbus_protocol.h:67]
 
-- [ ] [Review][Patch] Unguarded payload access in logging lambda — Size validation in condition (`x.size() < CAN_FRAME_SIZE`) but logging lambda accesses `x[2]`, `x[4]`, `x[5]` without re-checking size. **Fix:** Wrap logging statements with size guard or use validated variable access. [firmware/gateway.yaml:110-120]
+- [x] [Review][Patch] Unguarded payload access in logging — ✅ **FIXED**. CAT_INPUT handler protected by condition check (`if (x.size() < CAN_FRAME_SIZE) return false`). CAT_STATUS handler has explicit guard as first line in lambda (`if (x.size() < CAN_FRAME_SIZE) return;`). All payload accesses now guarded. [firmware/gateway.yaml:117, 141, 144]
 
 ### Deferred Items (Pre-existing, Not Regression)
 
