@@ -142,7 +142,7 @@ So that the gateway hardware is correctly initialized and can communicate with H
 
 ## Status
 
-review
+done
 
 ## Review Findings
 

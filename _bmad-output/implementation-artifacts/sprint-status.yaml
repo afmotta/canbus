@@ -60,7 +60,7 @@ development_status:
 
   # Epic 3: Gateway Firmware — Home Assistant Integration
   epic-3: in-progress
-  3-1-gateway-base-configuration-twai-esp-idf-and-native-api: review
+  3-1-gateway-base-configuration-twai-esp-idf-and-native-api: done
   3-2-gateway-cat-input-handler-button-events-to-home-assistant: backlog
   3-3-gateway-cat-status-handler-heartbeat-logging: backlog
   epic-3-retrospective: optional

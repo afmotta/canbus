@@ -69,33 +69,6 @@ api:
 ota:
   - platform: esphome
 
-# --------------- Globals (bridge between CAN lambda and HA event actions) ----
-globals:
-  - id: evt_room
-    type: uint8_t
-    initial_value: "0"
-  - id: evt_board
-    type: uint8_t
-    initial_value: "0"
-  - id: evt_button
-    type: uint8_t
-    initial_value: "0"
-  - id: evt_type
-    type: uint8_t
-    initial_value: "0"
-  - id: hb_room
-    type: uint8_t
-    initial_value: "0"
-  - id: hb_board
-    type: uint8_t
-    initial_value: "0"
-  - id: hb_uptime
-    type: uint8_t
-    initial_value: "0"
-  - id: hb_errors
-    type: uint8_t
-    initial_value: "0"
-
 # --------------- CAN Bus (native ESP32 TWAI) ---------------
 canbus:
   - platform: esp32_can
@@ -117,20 +90,16 @@ canbus:
                 lambda: 'if (x.size() < CAN_FRAME_SIZE) return false; return x[0] == PROTO_V1;'
               then:
                 - lambda: |-
-                    id(evt_room)   = payload_room(x);
-                    id(evt_board)  = payload_board(x);
-                    id(evt_button) = payload_button_index(x);
-                    id(evt_type)   = payload_event_type(x);
                     ESP_LOGI("gw", "Button R%02uB%u btn%u %s",
-                             id(evt_room), id(evt_board), id(evt_button),
-                             event_type_str(id(evt_type)).c_str());
+                             payload_room(x), payload_board(x), payload_button_index(x),
+                             event_type_str(payload_event_type(x)).c_str());
                 - homeassistant.event:
                     event: esphome.canbus_button
                     data:
-                      room: !lambda 'return to_string(id(evt_room));'
-                      board: !lambda 'return to_string(id(evt_board));'
-                      button: !lambda 'return to_string(id(evt_button));'
-                      event: !lambda 'return std::string(event_type_str(id(evt_type)));'
+                      room: !lambda 'return to_string(payload_room(x));'
+                      board: !lambda 'return to_string(payload_board(x));'
+                      button: !lambda 'return to_string(payload_button_index(x));'
+                      event: !lambda 'return std::string(event_type_str(payload_event_type(x)));'
 
       # ---- All heartbeats (CAT_STATUS = category 3) ----
       - can_id: 0x600
@@ -141,15 +110,14 @@ canbus:
                 lambda: 'if (x.size() < CAN_FRAME_SIZE) return false; return x[0] == PROTO_V1;'
               then:
                 - lambda: |-
-                    if (x.size() < CAN_FRAME_SIZE) return;
-                    id(hb_room)    = payload_heartbeat_room(x);
-                    id(hb_board)   = payload_heartbeat_board(x);
-                    id(hb_uptime)  = payload_uptime(x);
-                    id(hb_errors)  = payload_errors(x);
-                    if (id(hb_errors) != ERR_NONE) {
+                    const uint8_t room   = payload_heartbeat_room(x);
+                    const uint8_t board  = payload_heartbeat_board(x);
+                    const uint8_t uptime = payload_uptime(x);
+                    const uint8_t errors = payload_errors(x);
+                    if (errors != ERR_NONE) {
                       ESP_LOGW("gw", "Node R%02uB%u error=0x%02X uptime=%uh",
-                               id(hb_room), id(hb_board), id(hb_errors), id(hb_uptime));
+                               room, board, errors, uptime);
                     } else {
                       ESP_LOGD("gw", "Heartbeat R%02uB%u uptime=%uh",
-                               id(hb_room), id(hb_board), id(hb_uptime));
+                               room, board, uptime);
                     }
