@@ -1,3 +1,9 @@
+## Deferred from: code review of 3-1-gateway-base-configuration-twai-esp-idf-and-native-api.md (2026-06-02)
+
+- **Service send_data() error handling** [`firmware/gateway.yaml:53-76`] — Services log canbus errors but don't implement recovery, retry, or user notification. Pre-existing design pattern; not regression. Defer to future story on command reliability and timeout handling.
+
+- **Secrets file validation missing** [`firmware/gateway.yaml:41`] — No pre-check that secrets.yaml exists or contains ha_api_key before runtime. Pre-existing ESPHome behavior: build fails at config load if secret is missing. Not specific to this change; document in onboarding docs for users setting up secrets.
+
 ## Deferred from: code review of 2-3-node-heartbeat-and-can-frame-receive-lambda-safety.md (2026-06-02)
 
 - **`uptime_h` silently overflows at 255 hours (~10.6 days)** [`firmware/common/base_node.yaml`] — `(uint8_t)((millis() / 3600000UL) & 0xFF)` wraps to 0 with no flag or epoch counter; a receiver cannot distinguish a rebooted node from a 256-hour-old one. Pre-existing.

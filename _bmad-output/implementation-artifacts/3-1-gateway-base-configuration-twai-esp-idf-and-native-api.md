@@ -143,3 +143,23 @@ So that the gateway hardware is correctly initialized and can communicate with H
 ## Status
 
 review
+
+## Review Findings
+
+### Decision-Needed Items
+
+- [ ] [Review][Decision] Missing network transport layer — Gateway API component is configured but no network connectivity (Ethernet removed for RS485-CAN switch; WiFi not added). Original gateway had Ethernet configured. Dev Notes require "ESPHome native API over Ethernet (PoE) or WiFi". Question: Should WiFi configuration be added to this base story, or is network transport deferred to a separate story? [firmware/gateway.yaml:esphome]
+
+### Patch Items (Fixable)
+
+- [ ] [Review][Patch] Lambda variable scope vulnerability in homeassistant.event — Event data block calls `payload_room(x)`, `payload_board(x)`, `payload_button_index(x)`, `payload_event_type(x)` multiple times. If payload extraction functions have side effects or x is mutated between calls, event fires with wrong values. **Fix:** Cache all extracted values in local variables before event block. [firmware/gateway.yaml:99-102]
+
+- [ ] [Review][Patch] ERR_NONE constant undefined — Heartbeat handler compares `hb_errors != ERR_NONE` but constant may not be defined in canbus_protocol.h, causing build failure. **Fix:** Verify ERR_NONE exists in canbus_protocol.h; add if missing: `constexpr uint8_t ERR_NONE = 0x00;` [firmware/gateway.yaml:115]
+
+- [ ] [Review][Patch] Unguarded payload access in logging lambda — Size validation in condition (`x.size() < CAN_FRAME_SIZE`) but logging lambda accesses `x[2]`, `x[4]`, `x[5]` without re-checking size. **Fix:** Wrap logging statements with size guard or use validated variable access. [firmware/gateway.yaml:110-120]
+
+### Deferred Items (Pre-existing, Not Regression)
+
+- [x] [Review][Defer] Service send_data() error handling — Services log canbus errors but don't implement recovery, retry, or user notification. Pre-existing design pattern; not regression from this change. Defer to future story on command reliability. [firmware/gateway.yaml:53-76]
+
+- [x] [Review][Defer] Secrets file validation missing — No pre-check that secrets.yaml exists or contains ha_api_key before runtime. Pre-existing ESPHome behavior: build fails at config load if secret missing. Not specific to this change; document in onboarding. [firmware/gateway.yaml:41]
