@@ -39,6 +39,7 @@ ethernet:
 
 # --------------- Home Assistant API ---------------
 api:
+  password: !secret ha_api_key
   services:
     # Service: send an output command to a specific node.
     # Uses send_data() in a lambda because canbus.send: can_id: is not templatable.
