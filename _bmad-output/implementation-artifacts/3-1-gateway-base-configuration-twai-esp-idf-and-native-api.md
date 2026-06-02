@@ -12,9 +12,9 @@ So that the gateway hardware is correctly initialized and can communicate with H
 
 ## Acceptance Criteria
 
-- [x] **AC1:** Given the Waveshare ESP32-S3 platform, when `firmware/gateway.yaml` is configured, then it uses `esp32:` platform, `esp32s3` variant, `esp-idf` framework — Arduino framework is not used (NFR-4) ✅ DONE
+- [x] **AC1:** Given the Waveshare ESP32-S3-RS485-CAN GPIO mapping, when `firmware/gateway.yaml` is configured, then it uses `esp32:` platform, `esp32s3` variant, `esp-idf` framework — Arduino framework is not used (NFR-4) ✅ DONE
 
-- [x] **AC2:** When the gateway configures `canbus:` component, then it uses the `esp32_can` platform with `bit_rate: 125kbps` on available GPIO pins (POE-ETH hardware uses GPIO2/GPIO3 for CAN) ✅ DONE
+- [x] **AC2:** When the gateway configures `canbus:` component, then it uses the `esp32_can` platform with `tx_pin: GPIO15`, `rx_pin: GPIO16`, `bit_rate: 125kbps` ✅ DONE
 
 - [x] **AC3:** When the gateway configures API connectivity, then it includes the ESPHome native `api:` component with `password: !secret ha_api_key` ✅ DONE
 
@@ -31,7 +31,7 @@ So that the gateway hardware is correctly initialized and can communicate with H
 - [x] Task 1: Create base `gateway.yaml` with ESP32-S3 platform and TWAI CAN controller configuration
   - [x] 1.1: Configure `esphome:` section with device name and includes
   - [x] 1.2: Configure `esp32:` platform with `esp32s3` variant and `esp-idf` framework
-  - [x] 1.3: Configure `canbus:` with `esp32_can` platform on GPIO2/GPIO3 at 125kbps (uses POE-ETH hardware, not RS485-CAN)
+  - [x] 1.3: Configure `canbus:` with `esp32_can` platform on GPIO15/GPIO16 at 125kbps (RS485-CAN hardware)
   - [x] 1.4: Validate that Arduino framework is not present
 
 - [x] Task 2: Configure ESPHome native API and secrets management
@@ -102,36 +102,43 @@ So that the gateway hardware is correctly initialized and can communicate with H
 
 ✅ Story 3-1 base gateway configuration complete:
 
-**Hardware Note:** The existing `firmware/gateway.yaml` targets Waveshare ESP32-S3-POE-ETH-8DI-8DO hardware (with Ethernet) rather than the RS485-CAN board specified in the original story. This is the correct hardware for the current project implementation. The gateway uses GPIO2/GPIO3 for CAN (not GPIO15/GPIO16 which are used for Ethernet clk/cs pins).
+**Hardware Target:** Waveshare ESP32-S3-RS485-CAN (native TWAI CAN interface on GPIO15/GPIO16)
 
 **Changes Made:**
-1. ✅ Verified esp32s3 variant with esp-idf framework (no Arduino framework)
-2. ✅ Confirmed canbus configuration with esp32_can platform at 125KBPS
-3. ✅ Added `api:` component with `password: !secret ha_api_key` for secure authentication
-4. ✅ Verified `canbus_protocol.h` is included in esphome includes directive
-5. ✅ Verified `secrets.yaml.example` has `ha_api_key` placeholder
-6. ✅ Verified `.gitignore` contains `secrets.yaml`
+1. ✅ Updated `firmware/gateway.yaml` to target RS485-CAN board only
+2. ✅ Removed all POE-ETH specific hardware (Ethernet, I2C, digital I/O, RGB LED, buzzer, etc.)
+3. ✅ Configured esp32s3 variant with esp-idf framework (no Arduino framework)
+4. ✅ Configured canbus with esp32_can platform: TX=GPIO15, RX=GPIO16, 125KBPS
+5. ✅ Added `api:` component with `password: !secret ha_api_key` for secure HA authentication
+6. ✅ Included `canbus_protocol.h` in esphome includes directive
+7. ✅ Verified `secrets.yaml.example` has `ha_api_key` placeholder
+8. ✅ Verified `.gitignore` contains `secrets.yaml`
+9. ✅ Cleaned up event handlers to use local variables (no persistent globals needed)
 
 **Compilation:** Gateway configuration is syntactically complete and ready for `esphome compile` validation. ESPHome version will be recorded in firmware/README.md after successful compilation.
 
 ## File List
 
 **Modified:**
-- `firmware/gateway.yaml` — Added API password authentication from secrets
+- `firmware/gateway.yaml` — Refactored for RS485-CAN: set CAN TX/RX to GPIO15/GPIO16, removed POE-ETH hardware configs, added API password authentication, simplified event handlers
 
 **Unchanged but verified:**
-- `firmware/common/canbus_protocol.h` — Already included
+- `firmware/common/canbus_protocol.h` — Already included, provides protocol constants
 - `firmware/secrets.yaml.example` — Already has ha_api_key placeholder
 - `firmware/.gitignore` — Already lists secrets.yaml
 - `firmware/README.md` — ESPHome Version section exists (TBD placeholder)
 
 ## Change Log
 
-**2026-06-02 - Story 3-1 Complete**
+**2026-06-02 - Story 3-1 Implementation**
+- Refactored `firmware/gateway.yaml` to target Waveshare ESP32-S3-RS485-CAN exclusively
+- Configured native TWAI CAN controller: TX=GPIO15, RX=GPIO16, 125KBPS (AC-2)
+- Removed POE-ETH hardware configurations (Ethernet, I2C, digital I/O, LED, buzzer)
 - Added `password: !secret ha_api_key` to api component for secure HA authentication (AC-3, FR-7.2)
-- Verified esp32s3 variant with esp-idf framework (NFR-4)
-- Confirmed canbus_protocol.h inclusion for protocol constants (AC-5)
-- Gateway configuration ready for compilation and ESPHome version recording
+- Configured esp32s3 variant with esp-idf framework (NFR-4, AC-1)
+- Included canbus_protocol.h for protocol constants (AC-5)
+- Simplified event handlers with local variables (eliminated persistent globals)
+- Gateway configuration ready for compilation and ESPHome version recording (AC-6)
 
 ## Status
 
