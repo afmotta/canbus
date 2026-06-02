@@ -67,4 +67,8 @@ All values confirmed from V1.1 Eagle schematic. Use these in Story 2.1
 
 ## ESPHome Version
 
-**Pinned version:** TBD — record after first successful compile.
+**Pinned version:** ESPHome 2026.5.0 — confirmed by successful `esphome compile gateway.yaml` (Story 3.2) and the Epic 2 node compiles.
+
+> **Note:** As of ESPHome 2026.1.0 the `api: password:` option was removed. The gateway uses
+> API encryption instead (`api: encryption: key: !secret api_encryption_key`). Generate a key with
+> `openssl rand -base64 32` and add it to `secrets.yaml`.

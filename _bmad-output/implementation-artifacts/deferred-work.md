@@ -1,3 +1,9 @@
+## Deferred from: code review of 3-2-gateway-cat-input-handler-button-events-to-home-assistant.md (2026-06-02)
+
+- **project-context.md mandates staging-globals, contradicting AC6 and shipped code** [`_bmad-output/project-context.md:64,152`] — the doc says "always stage values into globals first" but AC6 and the committed CAT_INPUT handler deliberately use per-field `!lambda` re-decode with no globals. Same class of unacknowledged doc/firmware contradiction as the architecture.md follow-up the story already records. Correct project-context.md (and align with the [[project_gateway_ha_event_firing_approach]] decision) in a doc pass.
+- **No rate-limit/dedup on HA event firing** [`firmware/gateway.yaml:97`] — `homeassistant.event:` fires on every matching CAT_INPUT frame; a noisy bus or a stuck/repeating frame floods the HA event bus. Low risk for human-paced button clicks; pre-existing design, not introduced by Story 3.2. Revisit if a chatty-bus scenario emerges.
+- **README "pinned version" is documentation-only + migration note omits HA re-adoption** [`firmware/README.md:67-74`] — the README records ESPHome `2026.5.0` but nothing enforces it (no `esphome: min_version:` in YAML), and the password→encryption migration note doesn't mention that an already-adopted gateway must be re-paired in HA with the new encryption key. Moot until a device is deployed (no bench yet); add to onboarding docs.
+
 ## Deferred from: code review of 3-1-gateway-base-configuration-twai-esp-idf-and-native-api.md (2026-06-02)
 
 - **Service send_data() error handling** [`firmware/gateway.yaml:53-76`] — Services log canbus errors but don't implement recovery, retry, or user notification. Pre-existing design pattern; not regression. Defer to future story on command reliability and timeout handling.

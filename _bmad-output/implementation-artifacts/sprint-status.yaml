@@ -36,7 +36,7 @@
 
 generated: 2026-06-01
 last_updated: 2026-06-02
-last_updated_by: claude-dev-story-3-1
+last_updated_by: claude-code-review-3-2
 project: canbus
 project_key: NOKEY
 tracking_system: file-system
@@ -61,8 +61,8 @@ development_status:
   # Epic 3: Gateway Firmware — Home Assistant Integration
   epic-3: in-progress
   3-1-gateway-base-configuration-twai-esp-idf-and-native-api: done
-  3-2-gateway-cat-input-handler-button-events-to-home-assistant: backlog
-  3-3-gateway-cat-status-handler-heartbeat-logging: backlog
+  3-2-gateway-cat-input-handler-button-events-to-home-assistant: done
+  3-3-gateway-cat-status-handler-heartbeat-logging: ready-for-dev
   epic-3-retrospective: optional
 
   # Epic 4: PoC Validation & Sign-off

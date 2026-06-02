@@ -30,7 +30,8 @@ wifi:
 
 # --------------- Home Assistant API ---------------
 api:
-  password: !secret ha_api_key
+  encryption:
+    key: !secret api_encryption_key
   services:
     # Service: send an output command to a specific node.
     # Uses send_data() in a lambda because canbus.send: can_id: is not templatable.
@@ -87,19 +88,24 @@ canbus:
         then:
           - if:
               condition:
-                lambda: 'if (x.size() < CAN_FRAME_SIZE) return false; return x[0] == PROTO_V1;'
+                lambda: 'if (x.size() < CAN_FRAME_SIZE) return false; return x[0] == PROTO_V1 && payload_type(x) == MSG_BUTTON_EVENT;'
               then:
                 - lambda: |-
                     ESP_LOGI("gw", "Button R%02uB%u btn%u %s",
                              payload_room(x), payload_board(x), payload_button_index(x),
                              event_type_str(payload_event_type(x)).c_str());
-                - homeassistant.event:
-                    event: esphome.canbus_button
-                    data:
-                      room: !lambda 'return to_string(payload_room(x));'
-                      board: !lambda 'return to_string(payload_board(x));'
-                      button: !lambda 'return to_string(payload_button_index(x));'
-                      event: !lambda 'return std::string(event_type_str(payload_event_type(x)));'
+                # Only forward recognized event types to HA; unknown types are logged above but not fired.
+                - if:
+                    condition:
+                      lambda: 'return event_type_str(payload_event_type(x)) != "unknown";'
+                    then:
+                      - homeassistant.event:
+                          event: esphome.canbus_button
+                          data:
+                            room: !lambda 'return to_string(payload_room(x));'
+                            board: !lambda 'return to_string(payload_board(x));'
+                            button: !lambda 'return to_string(payload_button_index(x));'
+                            event: !lambda 'return std::string(event_type_str(payload_event_type(x)));'
 
       # ---- All heartbeats (CAT_STATUS = category 3) ----
       - can_id: 0x600
