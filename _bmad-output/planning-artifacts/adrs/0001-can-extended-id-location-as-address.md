@@ -143,7 +143,7 @@ x = reserved (2 bits)
 - **STATUS (heartbeat):** ID = `[category][room][board][0…]`; payload =
   `[proto_version, error_flags, uptime_lo, uptime_hi]` (values stay in payload).
 - **OUTPUT (command, gateway → node):** ID =
-  `[category:3][room:8][board:8][gateway_id:3][command_subtype:5][rsvd:2]`; payload =
+  `[category:3][room:8][board:8][gateway_id:4][command_subtype:5][rsvd:1]`; payload =
   command parameters. The node's RX acceptance filter matches its own `[OUTPUT][room][board]`
   and is **agnostic to `gateway_id`** (a node accepts a command for its location from
   whichever gateway owns it). The OUTPUT frame has spare room that INPUT does not, so the
@@ -194,9 +194,11 @@ HA-side command routing (targeting the right ESPHome device), and node→gateway
 — all only needed if a future redundancy (overlap) case appears, which is explicitly not
 the current motivation. The reserved field keeps that door open without designing it now.
 
-Width: `gateway_id:3` (8 gateways) comfortably covers a per-floor/partitioned deployment
-with headroom; confirm against the realistic gateway ceiling before freezing (see open
-items).
+Width: **`gateway_id:4` (16 gateways)**. Because `gateway_id` lives only in OUTPUT/SYSTEM
+frames — never in the tight INPUT layout — widening it costs only one of OUTPUT's two
+reserved bits (`command_subtype:5` is preserved). 16 covers per-floor (≈3) through
+finer per-room-cluster partitioning with comfortable headroom, chosen over `:3` to avoid
+a one-way-door regret at LIVE for a near-zero cost.
 
 ## Decision Outcome
 
@@ -308,9 +310,9 @@ Until this ADR is approved, those sections remain authoritative.
 3. **Decide OUTPUT command sub-addressing** — how `gateway_id` + `command_subtype` pack
    into the OUTPUT ID's low bits, and the node RX acceptance-filter mask (which must
    exclude `gateway_id`).
-4. **Confirm the `gateway_id` width** (proposed `:3` / 8 gateways) against the realistic
-   gateway ceiling, and reserve it in the OUTPUT/SYSTEM layout even though POC uses
-   `gateway_id = 0`.
+4. **`gateway_id` width set to `:4` (16 gateways)** — costs one OUTPUT reserved bit, keeps
+   `command_subtype:5`, leaves headroom past per-floor partitioning. Reserve it in the
+   OUTPUT/SYSTEM layout even though POC uses `gateway_id = 0`.
 5. **Sequence to de-risk bring-up** — get the v1 `on_frame` → `homeassistant.event` chain
    compiling/working on hardware *first*, or accept debugging the format and the chain
    together.
