@@ -1,8 +1,9 @@
 ---
 adr: 0001
 title: 'Adopt CAN Extended IDs with location-as-address (eliminate flat node_id)'
-status: 'Proposed'
+status: 'Accepted'
 date: '2026-06-04'
+acceptedDate: '2026-06-04'
 deciders: ['Alberto']
 author: 'Winston (System Architect)'
 supersedes:
@@ -23,12 +24,16 @@ relatedDocuments:
 
 ## Status
 
-**Proposed** — recommended, pending Alberto's go/no-go and resolution of the open items
-in the [Consequences](#consequences) section. Not yet approved for implementation.
+**Accepted** — approved by Alberto on 2026-06-04. The open items in the
+[Consequences](#consequences) section are now resolved *as part of implementation* (they
+are design details internal to the change, not blockers to the decision itself).
 
-Implementation, if approved, should land **before** production-hardware bring-up and
-**before** the project is declared LIVE (while every node is still reflashed in lockstep
-and no fielded firmware must stay compatible).
+Implementation must land **before** production-hardware bring-up and **before** the project
+is declared LIVE (while every node is still reflashed in lockstep and no fielded firmware
+must stay compatible).
+
+ADR-0002 (runtime-assignable addressing) depends on this decision and remains **Proposed** —
+it is *not* part of this implementation.
 
 ## Context
 
@@ -298,14 +303,15 @@ Affected artifacts:
 
 ### Supersession
 
-This ADR, **if approved**, supersedes:
+This ADR (Accepted 2026-06-04) supersedes:
 
 - `architecture.md` → Core Architectural Decisions → **Node ID space allocation**
   (the 0–99 / 100–199 / 200–299 / 300–399 ranges and "floor derivable from node ID").
 - `architecture.md` → Technical Constraints → **ESPHome `on_frame` constraint**
   ("CAN ID not cleanly accessible … → room/board must live in payload").
 
-Until this ADR is approved, those sections remain authoritative.
+Those sections are no longer authoritative; `architecture.md` is to be reconciled to match
+this ADR as part of implementation.
 
 ### Open items (must resolve before approval → implementation)
 
