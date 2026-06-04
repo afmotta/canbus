@@ -18,13 +18,14 @@ relatedDocuments:
 
 ## Status
 
-**Proposed.** The **segmentation decision is made** (a single bus is not viable — below).
-The **coupling method and segment count are open**, pending a cable-budget/zone sketch
-(see open items). This ADR records the decision that *is* made and frames the sub-decision
-that remains, with the option analysis to support it.
+**Proposed.** Two decisions are made: **(1)** the bus is **segmented** (a single bus is not
+viable — below), and **(2)** the coupling method is **software bridges** (store-and-forward).
+**Segment count and bit rate remain open**, pending a cable-budget/zone sketch (see open
+items).
 
 **Governing criterion: reliability** (not cost or firmware effort — Alberto is comfortable
-writing firmware; the system must be dependable as always-on house infrastructure).
+writing firmware; the system must be dependable as always-on house infrastructure). The
+software-bridge choice therefore comes with mandatory reliability requirements (see Decision).
 
 ## Context
 
@@ -47,9 +48,26 @@ Adopt a **segmented CAN topology**: a **main/backbone bus** plus **secondary bus
 (per zone/floor), joined by **inter-segment coupling devices**, arranged as a strict
 **tree (no loops)** — raw CAN has no TTL, so any ring is an unkillable broadcast storm.
 
-The **coupling method is left open** as a sub-decision among the four candidates below,
-to be resolved by the segment sketch. The choice does not affect the protocol (ADR-0001)
-or the control model (ADR-0003); it is a physical-layer/decision.
+**Coupling method — DECIDED: software bridges** (store-and-forward, ESP32-class — e.g.
+LilyGO T-2CAN or ESP32 + 2× MCP2515). Chosen over controller-as-hub because it keeps the
+critical controller **simple and redundancy-able** (ADR-0003) and makes each coupler
+failure **partial** (one zone), and because it does not require the star geometry the hub
+demands. The choice does not affect the protocol (ADR-0001) or the control model (ADR-0003);
+it is a physical-layer decision. (See [candidates ranked on reliability](#coupling-method-candidates--ranked-on-reliability)
+for why CAN-Ethernet, plain repeaters, and hub were not chosen.)
+
+Because reliability is the governing criterion and a software bridge's weak point is its
+active MCU/firmware, the choice carries **mandatory reliability requirements**:
+
+- **Single-purpose firmware** — the bridge only forwards; no node/actuator roles mixed in.
+- **Radios off** — disable WiFi/BT on the bridge MCU (the WiFi stack is a common source of
+  heap/stack instability); the bridge lives on CAN only.
+- **Hardware watchdog + brownout protection**, and **fail-safe on fault** — on any hang/
+  reset the bridge must come up clean and **never babble** (never hold a segment dominant or
+  emit garbage). A crashed bridge must degrade to "silent" (one zone's inputs lost), not to
+  "disrupts a segment."
+- **Clean, adequate power** to each bridge (likely a power rail run alongside CAN).
+- **Conservative forwarding** — buffer bursts without dropping; loop-free tree only.
 
 ### Interaction with ADR-0003 (must hold for any coupling method)
 
@@ -144,23 +162,28 @@ bridge ~$15–35). The cheap end is the DIY/firmware end.
   this load); selective forwarding adds bridge complexity.
 
 ## Open items
-1. **Cable-budget / zone sketch** — number of segments, approximate runs, and where they
-   converge. This input *drives* the coupling choice and the unit count/total cost.
-2. **Pick the coupling method** using #1 as the tiebreaker. On the reliability criterion the
-   field narrows to **controller-as-hub** (if zones home-run to the controller — add
-   **isolated per-port CAN transceivers**) vs **software bridge** (otherwise — industrial
-   build: watchdog, brownout, no WiFi). CAN-Ethernet is eliminated; a plain repeater only if
-   it is a fault-isolating star coupler.
+1. **Cable-budget / zone sketch** — number of segments, approximate runs, where they
+   converge. Now sets the **segment/bridge count** (the *method* is decided), and the bit-rate.
+2. **Bridge firmware platform** — minimal/stripped ESPHome (one toolchain, `on_frame` →
+   `send_data`) vs lean custom firmware for a pure-forwarder. Lean toward whichever is
+   easiest to make demonstrably fail-safe; radios off either way.
 3. **Bit rate** — confirm 125 kbps (or drop to 50 kbps for more headroom) per segment.
-4. **Forwarding/filtering rules** (if software bridges): what crosses each coupler.
-5. **Coupler reliability** — watchdogs / redundancy if a software bridge is chosen.
-6. **Re-verify all pricing** at purchase time (see caveat).
+4. **Forwarding rules** — start with **forward-all both ways** (simplest, most reliable;
+   the controller needs all node traffic and management must reach every segment). Add
+   selective filtering only if backbone load ever demands it.
+5. **Per-bridge power** — likely a power rail alongside CAN; size for reliability.
+6. **Bridge reliability validation** — soak-test the watchdog/fail-safe behavior (a hung
+   bridge must go silent, never babble).
+7. **Re-verify pricing** at purchase (see caveat) — secondary, since reliability governs.
 
 ## Alternatives considered
-- **Single trunk-and-spur (one bus).** Simplest and no couplers, but **rejected — not
-  viable** for this house's layout per Alberto.
-- The four coupling methods above are *not* alternatives to reject but the **open
-  sub-decision** this ADR scopes.
+- **Single trunk-and-spur (one bus).** Simplest, no couplers — **rejected, not viable**
+  for this house's layout per Alberto.
+- **Controller-as-hub / plain repeater / fault-isolating star coupler / CAN-Ethernet** —
+  evaluated on reliability (table above) and **not chosen**: CAN-Ethernet depends on the
+  fragile LAN; plain repeaters don't contain babbling faults; hub complicates the critical
+  controller and forces star geometry. Hub remains the natural fallback *if* a future layout
+  turns out to home-run all zones to the controller.
 
 ## Notes
 This ADR covers **CAN bus segmentation/coupling** only. Broader physical/electrical
