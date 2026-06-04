@@ -9,6 +9,7 @@ supersedes:
   - 'architecture.md §Core Architectural Decisions → Node ID space allocation'
   - 'architecture.md §Technical Constraints → ESPHome on_frame constraint (room/board in payload)'
 relatedDocuments:
+  - _bmad-output/planning-artifacts/adrs/0002-runtime-assignable-node-addressing-and-commissioning.md
   - _bmad-output/planning-artifacts/architecture.md
   - _bmad-output/project-context.md
   - docs/canbus-smart-home-reference.md
@@ -188,6 +189,11 @@ added after LIVE. Its purpose differs by topology:
   guarantees OUTPUT IDs are unique per source. It also gives command traceability.
 - *Segmented buses:* it is mostly diagnostic/traceability — collisions already dissolve
   because each segment is electrically separate and `(room, board)` is globally unique.
+
+Note: the ID *layout* fixed here is a one-way door, but the `(room, board)` *values* a node
+carries need not be compile-time constants — making them runtime-assignable (set at build,
+remappable via gateway command, "like static IPs") is a separate decision, see
+**[ADR-0002](0002-runtime-assignable-node-addressing-and-commissioning.md)**.
 
 **What stays deferred:** the *logical* ownership map (which gateway commands which rooms),
 HA-side command routing (targeting the right ESPHome device), and node→gateway event dedup
