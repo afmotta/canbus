@@ -142,14 +142,61 @@ x = reserved (2 bits)
   (1 byte, kept for forward-compatibility) or DLC = 0.
 - **STATUS (heartbeat):** ID = `[category][room][board][0…]`; payload =
   `[proto_version, error_flags, uptime_lo, uptime_hi]` (values stay in payload).
-- **OUTPUT (command, gateway → node):** ID = `[category][room][board][command_subtype]`;
-  payload = command parameters. The node's RX acceptance filter matches its own
-  `[OUTPUT][room][board]`.
+- **OUTPUT (command, gateway → node):** ID =
+  `[category:3][room:8][board:8][gateway_id:3][command_subtype:5][rsvd:2]`; payload =
+  command parameters. The node's RX acceptance filter matches its own `[OUTPUT][room][board]`
+  and is **agnostic to `gateway_id`** (a node accepts a command for its location from
+  whichever gateway owns it). The OUTPUT frame has spare room that INPUT does not, so the
+  `gateway_id` source field fits here without disturbing the tight INPUT layout. See
+  [Gateway addressing](#gateway-addressing-multi-gateway).
 
 Field widths are deliberately right-sized, not copied from the v1 `0–255` habit; the
 layout is a one-way door once LIVE, so `button:4` / `event:4` are sized to current needs
 plus modest headroom. The 3-bit category leaves room for future message classes
 (sensors, presence, bootloader) without a re-cut.
+
+## Gateway addressing (multi-gateway)
+
+POC ships a single gateway, but production may not (raised by Alberto, 2026-06-04). The
+v1 design gives gateways **no presence on the wire** — a single gateway silently owns all
+node→gateway traffic and is the sole sender of gateway→node commands. That invisibility
+is free for one gateway and breaks for two. Decisions captured here:
+
+- **Reason for going multi-gateway: scale / bus-length partitioning** (not redundancy).
+  So the demanding shared-bus problems — primary/backup election, overlapping-ownership
+  event dedup — are **out of scope**: under partitioning, each node is owned by exactly
+  one gateway.
+- **Future topology is undecided** (separate per-floor CAN segments *or* one shared bus).
+  The design must survive either.
+
+**Separation of concerns:**
+
+- **Node-facing identity stays gateway-agnostic.** `(room, board)` addressing is
+  untouched; nodes never encode or filter on a gateway.
+- **Gateway identity appears only in gateway-originated frames** — a `gateway_id` *source*
+  tag on OUTPUT commands, and (future) a gateway heartbeat under CAT_SYSTEM so HA and peer
+  gateways can see each gateway is alive. INPUT / STATUS (node→gateway) frames never carry
+  it.
+
+**Why reserve `gateway_id` now (one-way door):** even with a single POC gateway
+(`gateway_id = 0`), reserving the field is near-free and is the only part that *cannot* be
+added after LIVE. Its purpose differs by topology:
+
+- *Shared bus:* it is a **correctness requirement** — on one physical bus, two
+  transmitters must never emit the same 29-bit ID with different payloads simultaneously
+  (a latent arbitration/bus-error fault). A distinct source `gateway_id` per gateway
+  guarantees OUTPUT IDs are unique per source. It also gives command traceability.
+- *Segmented buses:* it is mostly diagnostic/traceability — collisions already dissolve
+  because each segment is electrically separate and `(room, board)` is globally unique.
+
+**What stays deferred:** the *logical* ownership map (which gateway commands which rooms),
+HA-side command routing (targeting the right ESPHome device), and node→gateway event dedup
+— all only needed if a future redundancy (overlap) case appears, which is explicitly not
+the current motivation. The reserved field keeps that door open without designing it now.
+
+Width: `gateway_id:3` (8 gateways) comfortably covers a per-floor/partitioned deployment
+with headroom; confirm against the realistic gateway ceiling before freezing (see open
+items).
 
 ## Decision Outcome
 
@@ -228,7 +275,10 @@ Affected artifacts:
 - `firmware/gateway.yaml` — `use_extended_id: true`; `on_frame` masks recomputed for the
   3-bit category at the new bit offsets; decode identity from the `can_id` variable.
 - `firmware/common/base_node.yaml` — TX IDs and the OUTPUT RX acceptance filter rebuilt
-  from `(category, room, board)`.
+  from `(category, room, board)`; the OUTPUT filter mask **ignores `gateway_id`** so a node
+  accepts commands from whichever gateway owns it.
+- `firmware/gateway.yaml` (OUTPUT senders) — `canbus_send_output` / `canbus_send_config`
+  stamp the gateway's own `gateway_id` into the OUTPUT ID; POC uses `gateway_id = 0`.
 - `firmware/generate_nodes.py` — drop `node_id`; derive the ID from `(room, board)`;
   **add `(room, board)` uniqueness validation**; update the CSV schema and CAN-ID map
   output.
@@ -255,11 +305,20 @@ Until this ADR is approved, those sections remain authoritative.
    add the enforcing validation to `generate_nodes.py` as part of the change.
 2. **Right-size the field widths** — confirm `room:8 / board:8 / button:4 / event:4 /
    category:3` against realistic ceilings before freezing the layout.
-3. **Decide OUTPUT command sub-addressing** — how command subtypes pack into the OUTPUT
-   ID's low bits, and the node RX acceptance-filter mask.
-4. **Sequence to de-risk bring-up** — get the v1 `on_frame` → `homeassistant.event` chain
+3. **Decide OUTPUT command sub-addressing** — how `gateway_id` + `command_subtype` pack
+   into the OUTPUT ID's low bits, and the node RX acceptance-filter mask (which must
+   exclude `gateway_id`).
+4. **Confirm the `gateway_id` width** (proposed `:3` / 8 gateways) against the realistic
+   gateway ceiling, and reserve it in the OUTPUT/SYSTEM layout even though POC uses
+   `gateway_id = 0`.
+5. **Sequence to de-risk bring-up** — get the v1 `on_frame` → `homeassistant.event` chain
    compiling/working on hardware *first*, or accept debugging the format and the chain
    together.
+
+*Deferred until/unless a redundancy (overlapping-ownership) case appears — explicitly NOT
+the current scale-driven motivation:* gateway ownership map, HA-side command routing, and
+node→gateway event dedup / primary-backup election. The reserved `gateway_id` field keeps
+this addable without re-cutting the ID.
 
 ### Risks
 
