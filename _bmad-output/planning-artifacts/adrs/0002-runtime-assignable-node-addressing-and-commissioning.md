@@ -85,6 +85,13 @@ traffic and bridges to HA's UI).
    configured. Mount everything, walk around pressing buttons, name each as it appears —
    the familiar Zigbee-style "press to pair" ceremony.
 
+   **Generalisation for nodes without a user button (ADR-0006).** Nodes that have no user
+   button — e.g. dedicated sensor nodes — carry a small **dedicated commissioning button**
+   on the board that serves the identical "commission me" role. The selector is therefore
+   "a commissioning button" generally; button nodes reuse a user button, sensor/other nodes
+   add a dedicated one. Combined nodes (a button node also hosting sensors) already have a
+   usable button.
+
 4. **Hardware id is the commissioning handle** (the "MAC behind the static IP") — used to
    address a node whose logical address is unset, duplicated, or wrong. Never used for
    normal traffic; announced for discovery and recovery.
