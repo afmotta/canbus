@@ -21,7 +21,10 @@ relatedDocuments:
 **Proposed.** The **segmentation decision is made** (a single bus is not viable — below).
 The **coupling method and segment count are open**, pending a cable-budget/zone sketch
 (see open items). This ADR records the decision that *is* made and frames the sub-decision
-that remains, with the option analysis and indicative pricing to support it.
+that remains, with the option analysis to support it.
+
+**Governing criterion: reliability** (not cost or firmware effort — Alberto is comfortable
+writing firmware; the system must be dependable as always-on house infrastructure).
 
 ## Context
 
@@ -64,14 +67,43 @@ or the control model (ADR-0003); it is a physical-layer/decision.
 - Relays live on Modbus at/near the controller (ADR-0003), **not** on CAN segments, so a
   coupler failure cuts a zone's *inputs*, not its relays (lights hold last state).
 
-### Coupling-method candidates
+### Coupling-method candidates — ranked on reliability
 
-| Method | What it is | Firmware? | Fault isolation | Notes |
-|---|---|---|---|---|
-| **Layer-1 repeater** | Electrically extends/retimes the bus; allows branching/star | No | Low (one collision domain) | Plug-and-play, low latency, galvanic isolation; buys *reach*, not isolation/filtering |
-| **Software bridge** (e.g. LilyGO T-2CAN, or ESP32 + 2× MCP2515) | Store-and-forward between two segments | **Yes** | High (separate domains; can filter) | Cheapest active option; can run ESPHome; per-segment firmware to keep robust |
-| **Controller-as-hub** | Multiple CAN interfaces on the controller; segments are spokes | Integrate in ESPHome | High | No separate devices; cheapest in parts; **requires all segments to physically reach the controller** |
-| **CAN↔Ethernet gateway** | Each segment gatewayed to the LAN the controller already has | No (configured) | High | Good when zones are far-flung with existing Ethernet; reintroduces Ethernet (switches) into the input path |
+Reliability decomposes into three sub-dimensions that pull differently: **fault
+containment** (does a segment fault stay local?), **blast radius** (what dies when the
+coupler fails?), and **component MTBF** (the coupler's own dependability).
+
+| Method | Fault containment | Coupler-failure blast radius | Component MTBF |
+|---|---|---|---|
+| **Plain layer-1 repeater** | ❌ poor — repeats a stuck-dominant/babbling fault to *all* segments (one logical bus); also CAN bit-timing limits how many can chain | one segment | ★★★ (no firmware) |
+| **Fault-isolating star coupler** (premium repeater) | ✅ auto-disconnects a faulted segment | one segment | ★★★ (no firmware) |
+| **Software bridge** (LilyGO T-2CAN, or ESP32 + 2× MCP2515) | ✅ store-and-forward — a bus-off on one segment stops forwarding; others unaffected; can filter; independent timing domains (scales to deep trees) | one segment (partial) | ★★ — active MCU + firmware; engineerable (watchdog, brownout, **no WiFi**, clean power) |
+| **Controller-as-hub** (independent isolated CAN ports) | ✅ each segment on its own controller chip; a fault drops only that port | **no new device** — but loads the critical controller | ★★ — ties to the controller |
+| **CAN↔Ethernet gateway** | ✅ | one segment | ★★ **+ depends on the whole LAN** |
+
+**Reliability conclusions:**
+
+- **CAN↔Ethernet — eliminated.** Routes inputs through switches/router/TCP — the fragile
+  overlay this architecture deliberately demotes. Worst reliability for this role.
+- **Plain repeater — weak.** Highest silicon MTBF but **does not contain** a babbling/
+  stuck-dominant fault (it repeats it everywhere). Only a **fault-isolating star coupler**
+  recovers containment — at premium cost.
+- **Software bridge** and **controller-as-hub** are the two genuinely strong options: both
+  contain faults and keep a failure *partial* (one zone). They differ on one axis —
+  - *Software bridge* keeps the critical controller **simple** (easier to cold-spare /
+    active-standby per ADR-0003), at the cost of N separate active devices (each a
+    partial-failure point, engineered to industrial spec).
+  - *Controller-as-hub* adds **no separate devices** (fewest failure points) and contains
+    per port, but **complicates the one board you most want simple/redundant** and forces a
+    **star geometry** (every segment home-runs to the controller).
+
+**Lean (reliability-first):** the choice is between **software bridge** and
+**controller-as-hub**, and the **tiebreaker is geometry**, not electronics — if all zones
+can home-run to the controller, the hub (with isolated per-port transceivers) is the most
+reliable (fewest parts, full containment, no firmware-bearing middleboxes); if they cannot,
+software bridges engineered to industrial spec keep each failure partial and the controller
+simple. A plain repeater is chosen only to insist on no-firmware silicon, and then it should
+be a fault-isolating star coupler.
 
 ### Indicative pricing (per segment/coupler)
 
@@ -114,7 +146,11 @@ bridge ~$15–35). The cheap end is the DIY/firmware end.
 ## Open items
 1. **Cable-budget / zone sketch** — number of segments, approximate runs, and where they
    converge. This input *drives* the coupling choice and the unit count/total cost.
-2. **Pick the coupling method** from the four candidates, using #1.
+2. **Pick the coupling method** using #1 as the tiebreaker. On the reliability criterion the
+   field narrows to **controller-as-hub** (if zones home-run to the controller — add
+   **isolated per-port CAN transceivers**) vs **software bridge** (otherwise — industrial
+   build: watchdog, brownout, no WiFi). CAN-Ethernet is eliminated; a plain repeater only if
+   it is a fault-isolating star coupler.
 3. **Bit rate** — confirm 125 kbps (or drop to 50 kbps for more headroom) per segment.
 4. **Forwarding/filtering rules** (if software bridges): what crosses each coupler.
 5. **Coupler reliability** — watchdogs / redundancy if a software bridge is chosen.
