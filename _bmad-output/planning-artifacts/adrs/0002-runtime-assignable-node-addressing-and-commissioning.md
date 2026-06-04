@@ -1,6 +1,6 @@
 ---
 adr: 0002
-title: 'Runtime-assignable node addressing & commissioning (static-IP model)'
+title: 'Commissioning of CAN-only button nodes (identical-firmware, press-to-assign)'
 status: 'Proposed'
 date: '2026-06-04'
 deciders: ['Alberto']
@@ -9,158 +9,150 @@ dependsOn:
   - 'ADR-0001: Adopt CAN Extended IDs with location-as-address'
 relatedDocuments:
   - _bmad-output/planning-artifacts/adrs/0001-can-extended-id-location-as-address.md
+  - _bmad-output/planning-artifacts/adrs/0003-centralized-single-controller-with-onboard-fallback.md
   - _bmad-output/planning-artifacts/architecture.md
   - firmware/common/canbus_protocol.h
   - firmware/common/base_node.yaml
-  - firmware/gateway.yaml
   - firmware/generate_nodes.py
   - firmware/nodes.csv
 ---
 
-# ADR-0002: Runtime-assignable node addressing & commissioning (static-IP model)
+# ADR-0002: Commissioning of CAN-only button nodes (identical-firmware, press-to-assign)
 
 ## Status
 
 **Proposed** — recommended, pending Alberto's go/no-go and resolution of the open items in
-[Consequences](#consequences). **Depends on ADR-0001**: this decision assumes the v2
-location-as-address layout (`room/board` carried in the Extended CAN ID) and only makes
-sense once that is adopted.
+[Consequences](#consequences). **Depends on ADR-0001** (location-as-address Extended IDs).
 
-Like ADR-0001, this should land **before** the project is declared LIVE, while every node
-is still reflashed in lockstep.
+> **Rescoped 2026-06-04, superseded in part by ADR-0003.** This ADR originally covered
+> runtime-assignable addressing for *all* nodes — buttons **and** actuators — plus binding
+> distribution. ADR-0003 (centralized single-controller) removes distributed actuators
+> (relays now hang off one controller via Modbus) and centralizes all binding logic on that
+> controller. So the actuator-addressing and binding-distribution material is **dropped**.
+> What remains — and is **affirmed as valuable** — is commissioning of the cheap
+> **CAN-only button nodes**, the only distributed addressable CAN devices left.
+
+Should land before the project is declared LIVE, while nodes are still reflashed in lockstep.
 
 ## Context
 
+### The value: identical firmware → "hand the electrician a box"
+
+The button nodes are many (one per wall switch) and cheap (CAN-only, no Ethernet/OTA). The
+operational prize is **byte-identical firmware on every node**: mount them anywhere in any
+order, then assign each its `(room, board)` *after* it's on the wall. The alternative —
+pre-flashing a distinct address per node — forces per-box labelling, a placement map, and
+precise instructions to the installer, with a real risk of two nodes being swapped during a
+busy install. The more nodes, the larger the win. **Identical firmware + in-situ assignment
+is the requirement this ADR serves.**
+
 ### What we have today
 
-`room_id` and `board_id` are ESPHome **substitutions** — compile-time *text replacement*.
-By the time firmware runs there is no variable: `base_node.yaml` emits literal constants
-(e.g. `heartbeat_payload(..., 7, 0)`). Changing a node's room or board therefore requires
-**editing the registry, regenerating, recompiling, and reflashing** that node.
+`room_id`/`board_id` are ESPHome **substitutions** — compile-time text replaced into
+literals. Changing a node's address means edit-registry → regenerate → recompile → reflash
+*that* node. `canbus_protocol.h` already scaffolds a config-write channel
+(`SUBTYPE_CONFIG_WRITE`), and the node `on_frame` already decodes a `[key, value]` write
+(today it only logs it).
 
-`generate_nodes.py` already assigns each node a unique identity from `nodes.csv`, and the
-protocol already scaffolds a write channel — `MSG_CONFIG_WRITE` / `MSG_CONFIG_ACK` exist in
-`canbus_protocol.h`, and `base_node.yaml`'s `on_frame` already decodes a `[key, value]`
-config write (today it only logs it).
+### The bootstrap problem
 
-### The desire
-
-Alberto wants room/board to be **set at build time *and* reassignable in the field via a
-gateway command**, surviving reboots — "like assigning static IPs to devices." A board
-swap or a re-rooming should become a Home Assistant action, not a reflash-and-redeploy.
-
-### The bootstrap problem this must solve
-
-Under ADR-0001's v2 layout, `room/board` *is* the node's bus address (and its `on_frame`
-RX acceptance filter). To *send* a "you are now room 9, board 2" command you must already
-be able to **address that specific node** — but the address is the very thing being
-changed, and may be wrong or duplicated. That is the chicken-and-egg this ADR resolves.
+Identical firmware means every node boots with the **same** default address → on the bus
+they are indistinguishable → you cannot target one to assign it. The original ADR solved
+this with *progressive* board ids (a staging pool) — but that requires **non-identical**
+firmware, defeating the deployment goal. We need a way to single out one physical,
+not-yet-addressed node.
 
 ## Decision
 
-Adopt a **static-IP commissioning model**, with the **gateway/HA as the assignment
-authority** (the "DHCP server"):
+Adopt **identical-firmware commissioning with button-press identification**, with the
+**ADR-0003 single controller as the commissioning authority** (it already hears all CAN
+traffic and bridges to HA's UI).
 
-1. **`room/board` become flash-backed runtime state, not compile-time constants.**
-   Implement as ESPHome `globals` with `restore_value: true`, **seeded** by the existing
-   build-time substitution as `initial_value`. The build-time value is the *factory
-   default*; a gateway command overwrites the persisted value.
+1. **`room/board` become flash-backed runtime state, not compile-time constants** — ESPHome
+   `globals` with `restore_value: true`, defaulting to the reserved unassigned address. A
+   config-write overwrites and persists them.
 
-2. **Primary workflow: staging pool + remap-all.** Nodes are flashed into a reserved
-   "unassigned" room with **progressive board ids**, then every node is remapped to its
-   final `(room, board)` after physical installation. This decouples *flashing* from
-   *placement* — a batch of boards can be flashed before anyone decides where each goes —
-   and the uniqueness of the progressive board id guarantees each staged node is
-   **individually reachable** for its remap command. (The alternative — baking the
-   *intended* address from `nodes.csv` and treating remap as exception-handling — uses the
-   identical mechanism and remains available; see [Alternatives](#alternatives-considered).)
+2. **Nodes ship identical and boot *unconfigured*** — reserved `ROOM_UNASSIGNED`. An
+   unconfigured node periodically **announces its unique hardware id** (RP2040 64-bit chip
+   id, `pico_get_unique_board_id`) on a `CAT_SYSTEM` frame, so the controller/HA can list
+   "unknown node, hwid X."
 
-3. **Reserve one `room_id` value as `ROOM_UNASSIGNED`.** A node in this room is
-   self-evidently uncommissioned, so the gateway can **auto-discover** new devices and
-   prompt for assignment — DHCP-style discovery, for free. Production traffic never uses
-   the reserved room, so "staged" and "live" are never ambiguous.
+3. **The button is the commissioning selector (press-to-assign).** While unconfigured, a
+   button press is treated as *"commission me"* — the node emits its hwid on a system frame.
+   The installer presses the button on the node just mounted; it pops up in the app; they
+   name it `(room, board)`; the controller writes that address **targeting the hwid** (which
+   sidesteps the indistinguishable-address problem); the node persists it and becomes
+   configured. Mount everything, walk around pressing buttons, name each as it appears —
+   the familiar Zigbee-style "press to pair" ceremony.
 
-4. **Keep the chip's unique hardware id as a read-only tiebreaker** (the "MAC behind the
-   static IP"). The RP2040 exposes a unique 64-bit flash id (`pico_get_unique_board_id`).
-   The node never *listens* on it, but **announces** it (in the heartbeat or a discovery
-   frame) so the gateway can disambiguate and recover from duplicate-address collisions
-   without physically unplugging boards.
+4. **Hardware id is the commissioning handle** (the "MAC behind the static IP") — used to
+   address a node whose logical address is unset, duplicated, or wrong. Never used for
+   normal traffic; announced for discovery and recovery.
 
-5. **Reassignment uses the existing config channel.** Add `KEY_ROOM_ID` / `KEY_BOARD_ID`
-   to `MSG_CONFIG_WRITE`; the node persists the global and replies with `MSG_CONFIG_ACK`.
-   Provide a **factory-reset** command that re-seeds room/board from the build-time
-   default.
+5. **Re-addressing and factory reset use the same channel.** `KEY_ROOM_ID` / `KEY_BOARD_ID`
+   via `SUBTYPE_CONFIG_WRITE`, acknowledged back; a factory-reset command returns a node to
+   unconfigured (re-enabling press-to-assign). Re-homing a node is therefore an app action,
+   no USB.
 
-6. **Apply semantics under v2 = write-then-reboot.** Because `room/board` keys the
-   `on_frame` RX filter and ESPHome configures that filter at `setup()` from a constant,
-   a remap **persists the new value and reboots**; the filter is rebuilt from the restored
-   value on next boot. The node reappears at its new address; the gateway follows it there.
+6. **Apply semantics = write-then-reboot** where simplest: persist the new address and
+   reboot so any address-derived setup is rebuilt cleanly; the node reappears configured.
 
-### Separation of identity (the model in one table)
+### Identity model (one table)
 
-| Static-IP world | This system | Mutable? | Used to address? |
+| Static-IP analogue | This system | Mutable? | Used to address? |
 |---|---|---|---|
-| Factory MAC | RP2040 unique flash id | No | No — read-only tiebreaker/diagnostic |
-| Static IP set on device | `room/board` (flash-backed globals) | Yes | Yes — the operational bus address |
-| Bench-assigned IPs | progressive `board_id` at flash time | (seed) | during commissioning |
-| DHCP server + reservation table | gateway / HA | — | the assignment authority & registry |
-| Link-local / unconfigured | reserved `ROOM_UNASSIGNED` | — | discovery state |
+| Factory MAC | RP2040 unique chip id | No | Commissioning/recovery handle only |
+| Static IP | `room/board` (flash-backed globals) | Yes | The operational bus identity (pub/sub subject) |
+| DHCP server + leases | the ADR-0003 controller + HA UI | — | The assignment authority & live registry |
+| Link-local / unconfigured | reserved `ROOM_UNASSIGNED` + press-to-assign | — | Discovery/commissioning state |
 
 ## Consequences
 
 ### Positive
 
-- Room/board changes become a runtime command — no reflash for board swaps or re-rooming.
-- Flashing is decoupled from placement: stage a batch, install, then assign.
-- New devices are auto-discovered via the reserved room (DHCP-style onboarding).
-- A stable node_id is **not** required for the happy path — the progressive logical
-  address is unique at commissioning time and serves as the channel for its own remap.
-- Reuses the already-scaffolded `MSG_CONFIG_WRITE` / `MSG_CONFIG_ACK` channel.
+- **Identical firmware** — one image, hand the installer a box, assign after mounting.
+- **No pre-labelling / placement map / swap risk.**
+- Re-homing and replacement are app actions (config-write by hwid), no USB.
+- The single controller (ADR-0003) is the natural authority — no extra infrastructure.
+- Reuses the scaffolded `SUBTYPE_CONFIG_WRITE` channel.
 
 ### Negative / costs
 
-- **Field replacement breaks naive "progressive."** Once nodes are deployed, a spare off
-  the shelf can collide with an existing default unless the gateway tracks the next-free
-  board id. Mitigation: the gateway *is* the assignment authority and owns that registry.
-- **Duplicate-address collisions need recovery.** Two nodes on the same `(room, board)`
-  both obey a remap. Mitigation: the announced hardware-id tiebreaker (item 4); physical
-  unplug-one is the last-resort fallback (acceptable at home scale).
-- **Remap is not instantaneous under v2** — it costs a reboot (write-then-reboot).
-- **Persistence caveat on RP2040.** `restore_value` relies on ESPHome preferences, which
-  on RP2040 use flash emulation; verify durability and wear behavior on the target board.
-- The registry (`nodes.csv`) is no longer the *sole* truth for live room/board — the
-  authoritative live map now lives with the gateway/HA. The CSV becomes the seed/default.
+- New firmware surface on the (otherwise trivial) button nodes: flash-backed address,
+  hwid announce, unconfigured-mode press handling, config-write apply.
+- **Persistence caveat on RP2040** — `restore_value` uses ESPHome preferences (flash
+  emulation on RP2040); verify durability/wear on target hardware.
+- The live `(hwid → room/board)` map becomes authoritative on the controller/HA side;
+  `nodes.csv` becomes seed/default, not the sole source of truth.
+- A duplicate `(room, board)` (e.g. a botched assignment) is still an address collision on
+  the pub/sub bus — recoverable via the hwid handle, but it must be detected.
 
 ### Open items
 
-1. **Pick the reserved `ROOM_UNASSIGNED` value** (e.g. `0` or top of range) and exclude it
-   from production room allocation.
-2. **Define the assignment-authority/registry** on the gateway/HA side: where the live
-   `(hardware_id → room/board)` map lives, and how next-free board ids are tracked.
-3. **Confirm the discovery announce**: carry the hardware id in the heartbeat vs. a
-   dedicated CAT_SYSTEM discovery frame; define its `MSG_*` type and payload.
-4. **Define the config command set & ACK semantics**: `KEY_ROOM_ID`, `KEY_BOARD_ID`,
-   factory-reset; whether the gateway addresses commissioning by current `(room, board)`
-   or (for recovery) by hardware id.
+1. **Pick the reserved `ROOM_UNASSIGNED` value** and exclude it from production allocation.
+2. **Define the discovery/commission frames** — `CAT_SYSTEM` hwid announce + press-to-commission
+   frame: message types and payloads.
+3. **Define the config command set & ACK** — `KEY_ROOM_ID`, `KEY_BOARD_ID`, factory-reset;
+   commissioning addressed by **hwid**, normal management by `(room, board)`.
+4. **Where the live registry lives** on the controller/HA side, and duplicate-address detection.
 5. **Verify RP2040 `restore_value` durability** on real hardware.
-6. **Validate the write-then-reboot flow** end-to-end with the v2 RX filter (node leaves
-   old address, reappears at new one, gateway re-targets).
+6. **Phasing** — through build/test, static compile-time addressing + manual reflash is fine
+   (per ADR-0003); this runtime commissioning is a **pre-go-live** deliverable.
 
 ## Alternatives considered
 
-- **Pre-load the *intended* address (remap = exception).** `generate_nodes.py` bakes the
-  planned `(room, board)` from `nodes.csv` as the default; remap only handles cases where
-  physical reality differs. Same mechanism, registry stays source of truth. Rejected as
-  *primary* because it re-couples flashing to placement decisions; retained as a fully
-  supported mode (a node can simply be flashed with a real default instead of the staging
-  room).
-- **Keep a separate immutable `node_id` as the addressing channel.** The original
-  proposal in ADR-0001's discussion. Made unnecessary as a *mandatory* mechanism by the
-  progressive-board scheme; its safety benefit is preserved more cheaply by the read-only
-  hardware-id tiebreaker.
-- **Runtime DHCP-style auto-negotiation of board ids** (identical firmware, addresses
-  self-assigned via on-bus negotiation). Rejected as over-engineered for home scale —
-  requires a collision-detection protocol and a bus master; the bench-assigned progressive
-  seed achieves the same uniqueness with far less complexity.
-- **Status quo (reflash to re-room).** Rejected: the motivating requirement is explicitly
-  to avoid reflash for a placement change.
+- **Progressive board ids / staging pool (the original primary).** Rejected: requires
+  non-identical firmware, which defeats the "hand the electrician one box" goal. Press-to-assign
+  achieves in-situ assignment *with* identical firmware.
+- **Pre-load the intended `(room, board)` per node** (reflash each with its address). Works,
+  and is exactly the POC's `generate_nodes.py` flow — fine for the bench, rejected as the
+  production primary because of the labelling/placement/swap burden at scale.
+- **Boxes pre-sorted by room** (identical-ish firmware grouped per room). A partial
+  middle-ground Alberto noted; still needs sorting and per-box handling. Press-to-assign is
+  strictly simpler.
+- **Status quo (reflash to re-room).** Rejected: motivating requirement is to avoid USB
+  reflash for placement changes in the field.
+
+> **Out of scope (moved by ADR-0003):** actuator addressing (no distributed CAN actuators —
+> relays are Modbus off the single controller) and binding-table distribution (bindings live
+> on the controller, pushed over its API, not commissioned over CAN).

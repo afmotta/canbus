@@ -127,8 +127,9 @@ on press, arbitrated); Modbus is master-commanded (controller writes a relay on 
    the controller's ESPHome config (the "dumb match" engine), and the per-binding authority
    (local-authoritative vs HA-with-fallback).
 2. **Binding lifecycle** — Phase 1 (now): static, compiled, manual reflash through
-   build/test. Phase 2 (pre-go-live): runtime push via the ADR-0002 commissioning
-   machinery. Confirmed phasing; Phase 2 not built yet.
+   build/test. Phase 2 (pre-go-live): bindings runtime-pushed to the controller **over its
+   own Native API/Ethernet** (not over CAN — bindings live on one board, so there is no
+   distributed commissioning to do). Confirmed phasing; Phase 2 not built yet.
 3. **Active/standby redundancy** — design the pair + Modbus-master hand-over. Future.
 4. **Modbus scale/latency validation** on target hardware.
 5. **Controller board selection** — a board with CAN + Ethernet + Modbus (RS485).
@@ -154,5 +155,7 @@ on press, arbitrated); Modbus is master-commanded (controller writes a relay on 
 ## Notes
 
 Builds on ADR-0001 (Extended-ID button events are the CAN pub/sub subjects; the `OUTPUT`
-category is management-only) and ADR-0002 (commissioning machinery, extended to distribute
-on-board bindings in Phase 2). A separate future ADR will cover physical/electrical topology.
+category is management-only) and ADR-0002 (which this ADR rescopes to commissioning of the
+CAN-only button nodes only — bindings are *not* commissioned over CAN; they live on this
+controller and are pushed over its API). A separate future ADR will cover
+physical/electrical topology.
