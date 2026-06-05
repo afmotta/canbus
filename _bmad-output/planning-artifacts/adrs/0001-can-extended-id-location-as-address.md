@@ -147,7 +147,9 @@ x = reserved (2 bits)
 - **INPUT (button):** identity + event fully in the ID. Payload = `[proto_version]`
   (1 byte, kept for forward-compatibility) or DLC = 0.
 - **STATUS (heartbeat):** ID = `[category][room][board][0…]`; payload =
-  `[proto_version, error_flags, uptime_lo, uptime_hi]` (values stay in payload).
+  `[proto_version, msg_type, error_flags, uptime_lo, uptime_hi]` (values stay in payload; the
+  `msg_type` byte — `MSG_HEARTBEAT` — preserves the uniform `[ver][type]` header and leaves
+  room for future STATUS subtypes; matches `canbus_protocol.h` and the protocol reference).
 - **OUTPUT (command, gateway → node):** ID =
   `[category:3][room:8][board:8][gateway_id:4][command_subtype:5][rsvd:1]`; payload =
   command parameters. The node's RX acceptance filter matches its own `[OUTPUT][room][board]`
