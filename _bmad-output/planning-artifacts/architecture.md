@@ -53,7 +53,7 @@ _This document builds collaboratively through step-by-step discovery. Sections a
 
 - **RP2040 nodes**: No WiFi, no OTA, flashed once via USB before wall installation. Firmware is permanent. Cost of a post-installation firmware bug is physical wall access — treat the protocol as a hardware interface, not software.
 - **Protocol versioning is mandatory on day one.** `PROTO_V1 = 0x01` must be in `canbus_protocol.h` before the PoC build. The PoC should validate the exact wire format, not discover it. A versioned CAN frame spec (exact byte positions, frame sizes, ID bit layout) must be a PoC deliverable, not a narrative.
-- **ESPHome `on_frame` constraint**: CAN ID not cleanly accessible in mask-filtered lambdas → room/board must live in payload.
+- **ESPHome `on_frame` constraint**: ~~CAN ID not cleanly accessible in mask-filtered lambdas → room/board must live in payload.~~ **SUPERSEDED by ADR-0001 (Accepted 2026-06-04):** the frame `can_id` *is* accessible in `on_frame` lambdas, so room/board (and button/event) now live in the 29-bit Extended ID, not the payload. See `adrs/0001-can-extended-id-location-as-address.md`.
 - **ESPHome `homeassistant.event` constraint**: Lambda-local variables not in scope for data blocks → all values must be staged into ESPHome globals first. Global variable type, declaration location, and flush/reset semantics must be explicitly specified in implementation.
 - **`esp-idf` framework required on gateway**: Arduino framework does not support native TWAI on ESP32-S3.
 - **Protocol freeze risk**: Any breaking change to `canbus_protocol.h` requires reflashing ALL nodes (no OTA). Protocol must be versioned and treated as frozen after PoC sign-off.
@@ -72,7 +72,7 @@ _This document builds collaboratively through step-by-step discovery. Sections a
 5. **Platform framework split** — nodes use `rp2040` platform; gateway must use `esp-idf`. Framework confusion is a silent, hard-to-debug failure mode.
 6. **Hardware verification gates** — three open questions (OQ-1, OQ-2, OQ-3) must be resolved from physical documentation before any firmware can compile correctly.
 7. **Observability gap in the untested chain** — the on_frame→global→homeassistant.event path has no exception surface. Logging must be explicit within the chain; silent failures are undetectable otherwise.
-8. **CAN bus topology** — arbitration priority, bus load under full node deployment, cable length, and ground continuity across floors are not addressed. Cannot retrofit CAN ID priority after protocol freeze. At minimum a back-of-envelope topology sketch (node count, cable length, arbitration ID allocation) should exist before protocol is finalized.
+8. **CAN bus topology** — bus load under full node deployment, cable length, and ground continuity across floors are not addressed (a back-of-envelope topology sketch should exist before protocol freeze; physical topology is parked for a future ADR per ADR-0003). *Arbitration priority is resolved:* the category bits carry the deliberate priority and the room-number sub-ordering is accepted as a benign, conscious limitation — see **ADR-0004 (D3)**.
 9. **Commissioning procedure gap** — no procedure exists for registering, assigning an ID to, and verifying a new node on the bus before wall installation. A commissioning checklist is a required PoC deliverable given the no-OTA constraint.
 10. **Single gateway = single point of failure** — if the gateway is unavailable, all button events are silently dropped. This is an accepted PoC constraint but must be a stated architectural decision, not an implicit one.
 
@@ -163,20 +163,20 @@ internal-API call (`api::global_api_server->send_homeassistant_action`); that wa
 on 2026-06-02 (Alberto) because the internal API is undocumented and version-coupled,
 whereas the YAML action carries neither risk while still avoiding global staging.
 
-**Node ID space allocation:**
+**Node ID space allocation:** — **SUPERSEDED by ADR-0001 (Accepted 2026-06-04).**
+The flat `node_id` coordinate and these floor ranges are eliminated. A node's address is
+now its `(room, board)`, encoded directly into the 29-bit Extended CAN ID
+(`[category:3][room:8][board:8][…]`); floor is CSV metadata only and is no longer derivable
+from the ID. The original allocation table is retained below struck-through for history.
+See `adrs/0001-can-extended-id-location-as-address.md`.
 
-| Range | Assignment |
+| ~~Range~~ | ~~Assignment~~ |
 | --- | --- |
-| 0–99 | Core / infrastructure devices (gateway, future hubs) |
-| 100–199 | Ground floor nodes (9 rooms) |
-| 200–299 | First floor nodes (8 rooms) |
-| 300–399 | Second floor nodes (2 rooms) |
-| 400–511 | Reserved / future expansion |
-
-Note: floor is derivable from node ID range — a conscious, documented override of the
-"no semantic meaning in CAN ID" principle. Trade-off accepted for readable CAN traces.
-Node ID assignment within each range is flat sequential (100, 101, 102…), not
-room-encoded.
+| ~~0–99~~ | ~~Core / infrastructure devices~~ |
+| ~~100–199~~ | ~~Ground floor nodes (9 rooms)~~ |
+| ~~200–299~~ | ~~First floor nodes (8 rooms)~~ |
+| ~~300–399~~ | ~~Second floor nodes (2 rooms)~~ |
+| ~~400–511~~ | ~~Reserved / future expansion~~ |
 
 **Heartbeat disposition (PoC):**
 Gateway logs heartbeat frames via ESPHome logger only. No `esphome.canbus_heartbeat`
@@ -224,10 +224,10 @@ subsequent compiles use the pinned version.
 
 **Commissioning procedure (PoC, 2-node bench):**
 
-1. Edit `nodes.csv` with node entry (node_id in correct floor range, room, board, GPIOs)
-2. Run `python3 generate_nodes.py` — review CAN ID map for duplicates
-3. `esphome compile nodes/node<id>.yaml` — must pass before flashing
-4. Flash via USB: `esphome upload nodes/node<id>.yaml`
+1. Edit `nodes.csv` with node entry (floor, room, board, location, GPIOs — no node_id; ADR-0001)
+2. Run `python3 generate_nodes.py` — review CAN ID map; rejects duplicate `(room, board)`
+3. `esphome compile nodes/node-r<room>-b<board>.yaml` — must pass before flashing
+4. Flash via USB: `esphome upload nodes/node-r<room>-b<board>.yaml`
 5. Power node; verify at least one heartbeat visible in ESPHome gateway log within 60s
 
 ### Decision Impact Analysis
@@ -284,22 +284,20 @@ in YAML lambdas.
 **Correct:**
 
 ```cpp
-// CAN ID construction
-return can_id(CAT_INPUT, ${node_id});
+// CAN ID construction (ADR-0001: identity in the Extended ID)
+id(can0).send_data(can_input_id(${room_id}, ${board_id}, ${button_index}, EVT_CLICK),
+                   true, input_payload());
 
-// Payload construction
-return button_payload(${button_index}, EVT_CLICK, ${room_id}, ${board_id});
-
-// Event type string on gateway
-std::string evt = event_type_str(x[3]);
+// Event type string on gateway — decode identity from the frame's can_id
+std::string evt = event_type_str(id_event(can_id));
 ```
 
 **Wrong:**
 
 ```cpp
-return (1 << 9) | ${node_id};    // raw bit shift
-return {0x01, 0x01, ...};        // magic bytes
-if (x[3] == 1) evt = "click";    // magic number
+return ((CAT_INPUT) << 26) | ...;  // raw bit shift — use the can_*_id() helpers
+return {0x01, 0x01, ...};          // magic bytes
+if (id_event(can_id) == 1) ...;    // magic number — use EVT_* constants
 ```
 
 ### Gateway on_frame Handler Pattern
@@ -382,29 +380,26 @@ If a generated file needs a one-off change for debugging, make the change in
 `nodes.csv` or the template in `generate_nodes.py` — never directly in the
 generated output.
 
-### Node ID Assignment Rule
+### Node Addressing Rule — **revised by ADR-0001 (Accepted 2026-06-04)**
 
-Node IDs must be assigned from the correct floor range:
+There is no `node_id` and no floor range to assign from. A node is identified by its
+`(room, board)`, which becomes its CAN address directly. The provisioning rule is now:
 
-| Range | Floor |
-| --- | --- |
-| 0–99 | Infrastructure (gateway etc.) |
-| 100–199 | Ground floor |
-| 200–299 | First floor |
-| 300–399 | Second floor |
+- `(room, board)` MUST be unique across the whole registry — a duplicate is a physical
+  address collision (two boards answering one ID). `generate_nodes.py` rejects duplicates
+  and out-of-range room/board (0–255 each).
+- `floor` remains a CSV column for grouping/labels only; it is not encoded in the ID.
 
-Assign IDs sequentially within each range. Do not skip IDs without a comment in
-`nodes.csv` explaining the gap. The `generate_nodes.py` validator must reject IDs
-outside 0–399 or duplicates.
+The original floor-range table is removed; see `adrs/0001-can-extended-id-location-as-address.md`.
 
 ### Naming Conventions
 
 - **ESPHome component IDs:** `snake_case` (e.g. `can0`, `btn_0`, `can_input_handler`)
 - **ESPHome substitution variables:** `snake_case` without `${}` in the block
-- **C++ constants:** `UPPER_SNAKE_CASE` (e.g. `CAT_INPUT`, `EVT_CLICK`, `CAN_FRAME_SIZE`)
-- **C++ functions:** `snake_case` (e.g. `can_id()`, `button_payload()`, `event_type_str()`)
+- **C++ constants:** `UPPER_SNAKE_CASE` (e.g. `CAT_INPUT`, `EVT_CLICK`, `CAN_MASK_OUTPUT_ADDR`)
+- **C++ functions:** `snake_case` (e.g. `can_input_id()`, `id_room()`, `event_type_str()`)
 - **Python identifiers:** `snake_case`; constants `UPPER_SNAKE_CASE`
-- **Generated node filenames:** `node{id:03d}.yaml` — zero-padded 3-digit ID
+- **Generated node filenames:** `node-r{room}-b{board}.yaml` (ADR-0001; was `node{id:03d}.yaml`)
 
 ### Enforcement Guidelines
 
@@ -494,7 +489,7 @@ canbus/                                  # project root
 
 **Code generation boundary** (`firmware/nodes.csv` → `generate_nodes.py` → `firmware/nodes/`)
 
-- Input: CSV schema (node_id, floor, room, board, location, gpio_list)
+- Input: CSV schema (floor, room, board, location, gpio_list — no node_id; ADR-0001)
 - Output: ESPHome YAML files with all substitutions resolved
 - Invariant: output is fully deterministic from input; running the script twice
   produces identical output
@@ -506,16 +501,16 @@ Physical button press
   ↓
 ESPHome on_multi_click [ firmware/common/button.yaml ]
   ↓ (EVT_CLICK / EVT_DOUBLE_CLICK / etc.)
-CAN frame construction [ firmware/common/canbus_protocol.h ]
-  can_id(CAT_INPUT, node_id) + button_payload(btn, evt, room, board)
+CAN frame construction [ firmware/common/canbus_protocol.h ]   (ADR-0001: identity in the ID)
+  can_input_id(room, board, button, event) + input_payload()  // 29-bit Extended ID
   ↓
 MCP2515 SPI0 → CAN bus 125 kbps
   ↓
 ESP32-S3 TWAI receiver
   ↓
-on_frame if:/condition: guard [ firmware/gateway.yaml ]
-  if (x.size() < CAN_FRAME_SIZE) return false; x[0] == PROTO_V1
-  decode: room=x[4], board=x[5], button=x[2], event=event_type_str(x[3])
+on_frame if:/condition: guard [ firmware/gateway.yaml ]   (category-mask filter, extended)
+  if (x.size() < INPUT_PAYLOAD_MIN) return false; x[0] == PROTO_V1
+  decode from can_id: id_room / id_board / id_button / event_type_str(id_event)
   homeassistant.event: esphome.canbus_button (per-field !lambda)
   ↓
 WiFi → Home Assistant native API
@@ -530,9 +525,10 @@ HA automation trigger
 **`firmware/nodes.csv` schema:**
 
 ```csv
-node_id, floor, room, board, location, gpio_list
-100, 0, 7, 0, "Hallway entrance", "2,3,4,5"
+floor, room, board, location, gpio_list
+0, 7, 0, "Hallway entrance", "20,21"
 ```
+(ADR-0001: `node_id` removed; `(room, board)` is the address and must be unique.)
 
 **`firmware/secrets.yaml.example`** (committed template):
 
@@ -559,7 +555,7 @@ esphome upload nodes/node100.yaml    # flash node via USB
 - ESPHome rp2040 (nodes) and esp-idf (gateway) are independently configured — no shared platform block conflicts.
 - The `homeassistant.event:` action with per-field `!lambda` decode is structurally consistent with eliminating globals.
 - `canbus_protocol.h` inclusion is compile-time only; no runtime cross-platform issues.
-- Node ID ranges (100-399) fit within the 9-bit CAN ID space (0-511).
+- ~~Node ID ranges (100-399) fit within the 9-bit CAN ID space (0-511).~~ (ADR-0001: now 29-bit Extended IDs; `(room, board)` is the address — `room:8`/`board:8` fit with headroom.)
 
 **Pattern Consistency:** Implementation patterns align with all architectural decisions.
 Naming conventions are consistent across C++, ESPHome YAML, and Python. The
@@ -607,8 +603,8 @@ listed for code review. Enforcement guidelines are specific and actionable.
 
 **Important (non-blocking):**
 
-- `CAN_FRAME_SIZE = 8` constant does not yet exist in `canbus_protocol.h`. Must be added as part of Story 2 (protocol header implementation). Referenced by the lambda safety pattern — agents must add it before writing any on_frame handler.
-- PoC bench node IDs should be explicitly assigned: node 100 and node 101 (ground floor range). The `nodes.csv` for the PoC should use these IDs.
+- ~~`CAN_FRAME_SIZE = 8` constant…~~ **(ADR-0001)** With identity moved into the ID, frames are short and variable-length; the fixed 8-byte guard is replaced by per-frame minimums (`INPUT_PAYLOAD_MIN`, `STATUS_PAYLOAD_MIN`, `CONFIG_PAYLOAD_MIN`) in `canbus_protocol.h`.
+- ~~PoC bench node IDs should be explicitly assigned: node 100 and node 101.~~ **(ADR-0001)** The PoC bench nodes are now addressed by `(room, board)` — `(7,0)` and `(8,0)` — generating `node-r7-b0.yaml` / `node-r8-b0.yaml`.
 - Hardware open questions (OQ-1, OQ-2, OQ-3) must be resolved from physical board documentation before any firmware compiles. These are pre-implementation gates, not architectural gaps.
 - Gateway HA event firing uses the documented `homeassistant.event:` YAML action (decision reversed 2026-06-02 from the earlier `api::global_api_server` internal-API approach). No version-specific C++ API lookup required.
 
@@ -674,7 +670,7 @@ listed for code review. Enforcement guidelines are specific and actionable.
 
 - Read `firmware/common/canbus_protocol.h` before writing any CAN-related lambda
 - Read this document section "Implementation Patterns & Consistency Rules" before starting any story
-- Check `firmware/nodes.csv` before assigning any node ID
+- Check `firmware/nodes.csv` before assigning a node's `(room, board)` — it must be unique (ADR-0001)
 - Compile with `esphome compile` before marking any story done
 
 **First Implementation Story:** Directory restructure — move `docs/esphome_canbus/` contents to `firmware/`, update all relative paths in YAML includes, verify `esphome compile` still passes on at least one node config.

@@ -1,23 +1,21 @@
 # =============================================================================
-# Node: node100 — ID 100
+# Node: node-r8-b0 — Room 8, Board 0
 # =============================================================================
 # Floor:    Ground
-# Location: Ground floor hallway
-# Room:     7, Board: 0
+# Location: Ground floor living room
 # Buttons:  2 (GPIO 20,21)
-# CAN IDs:  Input  = 0x264  (CAT_INPUT,  node → gateway, button events)
-#           Status = 0x664  (CAT_STATUS, node → gateway, heartbeat)
-#           Output = 0x464  (CAT_OUTPUT, gateway → node, commands / RX filter)
+# CAN IDs (29-bit Extended, location-as-address):
+#   Input  base = 0x04200000  (CAT_INPUT,  node → gateway; button/event in low bits)
+#   Status      = 0x0C200000  (CAT_STATUS, node → gateway, heartbeat)
+#   Output RX   = 0x08200000  (CAT_OUTPUT, gateway → node; mask 0x1FFFFC00)
 # =============================================================================
 
 substitutions:
-        node_name: "node100"
-        node_id: "100"
-        room_id: "7"
+        node_name: "node-r8-b0"
+        room_id: "8"
         board_id: "0"
-        input_can_id: "0x264"
-        output_can_id: "0x464"
-        status_can_id: "0x664"
+        output_can_id: "0x08200000"
+        status_can_id: "0x0C200000"
         debounce_ms: "50"
         can_cs_pin: "GPIO9"
         can_clk_pin: "GPIO2"
@@ -29,7 +27,7 @@ substitutions:
 
 esphome:
   name: ${node_name}
-  friendly_name: "Ground floor hallway"
+  friendly_name: "Ground floor living room"
 
 rp2040:
   board: rpipico

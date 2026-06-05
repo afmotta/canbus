@@ -22,17 +22,29 @@ The button boards are walled in and hard to reach after installation. The RP2040
 
 ## CAN Protocol v1
 
-### CAN ID (standard 11-bit)
+### CAN ID (29-bit Extended) — ADR-0001, location-as-address
+
+> **Revised 2026-06-04 by ADR-0001.** v1 originally used a standard 11-bit ID
+> (`[category:2][node_id:9]`) with room/board in the payload. The flat `node_id` is now
+> gone: a node's address **is** its `(room, board)`, encoded directly into a 29-bit
+> Extended ID. Identity + classification live in the ID; the payload carries only values.
 
 ```
-Bit:  10  9 │ 8  7  6  5  4  3  2  1  0
-      C   C │ N  N  N  N  N  N  N  N  N
+Common high fields (all categories):
 
-C = Category (2 bits, 0-3)
-N = Node ID  (9 bits, 0-511)
+Bit: 28 27 26 │ 25 ........ 18 │ 17 ........ 10 │ 9 .......... 0
+     C  C  C  │ R  (room:8)    │ B  (board:8)   │ per-category (10)
+
+Per-category low 10 bits [9:0]:
+  CAT_INPUT  (1): button:4 [9:6]  event:4 [5:2]  rsvd:2
+  CAT_OUTPUT (2): gateway_id:4 [9:6]  subtype:5 [5:1]  rsvd:1
+  CAT_STATUS (3): rsvd:10  (values in payload)
+  CAT_SYSTEM (0): reserved (future gateway heartbeat)
 ```
 
-The CAN ID is intentionally generic. It carries no semantic meaning about rooms or buttons — only a flat sequential node identifier and a category for bus arbitration priority and hardware filtering. All semantic data (room, board, button index, event type) lives in the 8-byte payload, making the payload fully self-describing.
+`(room, board)` must be globally unique — it is the bus address; a duplicate is a physical
+address collision. `gateway_id` is a source tag on OUTPUT only (POC = 0). All frames are
+sent as Extended IDs (`use_extended_id: true`).
 
 **Categories** (lower value = higher CAN bus priority):
 
@@ -43,43 +55,36 @@ The CAN ID is intentionally generic. It carries no semantic meaning about rooms 
 | 2     | CAT_OUTPUT | gateway → node   | LED/relay commands, config     |
 | 3     | CAT_STATUS | node → gateway   | Heartbeat, health              |
 
-The gateway uses CAN mask filtering (`can_id_mask: 0x600`) to match all messages of a given category regardless of node ID.
+The gateway matches a whole category with a category-only mask (`can_id: cat << 26`,
+`can_id_mask: 0x1C000000`) and decodes room/board/button/event from the `can_id`. A node's
+OUTPUT RX filter matches `[category][room][board]` with mask `0x1FFFFC00`, ignoring
+`gateway_id`/`subtype`, so it obeys whichever gateway owns it.
 
-### Data payload (8 bytes)
+### Data payloads (short — identity is in the ID)
 
-**Button event** (CAT_INPUT):
+**Button event** (CAT_INPUT): `[0x01]` — protocol version only. Room, board, button index,
+and event type are all in the ID.
 
-```
-Byte 0: Protocol version (0x01)
-Byte 1: Message type (0x01 = MSG_BUTTON_EVENT)
-Byte 2: Button index (0–5)
-Byte 3: Event type
-         0x01 = click
-         0x02 = double_click
-         0x03 = triple_click
-         0x04 = long_press (1–3 seconds)
-         0x05 = extra_long_press (3+ seconds)
-Byte 4: Room ID (0–255)
-Byte 5: Board ID (0–255)
-Byte 6–7: Reserved (0x00)
-```
-
-**Heartbeat** (CAT_STATUS, sent every 30 seconds):
+**Heartbeat** (CAT_STATUS, every 30 s):
 
 ```
 Byte 0: Protocol version (0x01)
-Byte 1: Message type (0x01 = MSG_HEARTBEAT)
-Byte 2: Uptime in hours (uint8, wraps at 255)
-Byte 3: Button states bitmask (current GPIO states)
-Byte 4: Error flags (0x00 = healthy, 0x01 = CAN TX fail, 0x02 = bus off)
-Byte 5: Room ID
-Byte 6: Board ID
-Byte 7: Reserved (0x00)
+Byte 1: Message type     (0x01 = MSG_HEARTBEAT)
+Byte 2: Error flags      (0x00 healthy, 0x01 CAN TX fail, 0x02 bus off)
+Byte 3: Uptime hours, low byte   (uint16 LE)
+Byte 4: Uptime hours, high byte  (0xFFFF = ≥ 65535 h)
 ```
 
-### Why room/board are in the payload (not just the CAN ID)
+**Command** (CAT_OUTPUT): command type is the ID `subtype`; payload is `[0x01, params…]`.
+Config write (`subtype = SUBTYPE_CONFIG_WRITE`): `[0x01, key, value_hi, value_lo]`.
 
-ESPHome's `on_frame` CAN trigger provides the data bytes (`x`) but does not cleanly expose the received CAN ID as a lambda variable. When the gateway uses mask-based filtering to match all button events at once, it cannot decode which node sent the message from the CAN ID alone. Embedding room and board in the payload makes the frame self-describing and avoids the need for a custom ESPHome component. It also simplifies CAN trace debugging.
+### Why identity is in the CAN ID (not the payload)
+
+ESPHome's `on_frame` trigger **does** expose the received frame's `can_id` as a lambda
+variable, so the gateway can decode the sender's room/board (and button/event) from the ID
+even under a category-wide mask filter. Putting identity in the ID removes the `node_id`
+coordinate entirely, makes location↔address drift impossible, shrinks button frames, and
+keeps CAN traces self-describing (`R7 B0 btn2 …`). See `adrs/0001-…` for the full rationale.
 
 ## Project file structure
 
@@ -91,7 +96,7 @@ esphome_canbus/
 │   └── button.yaml          # Per-button package: GPIO + on_multi_click with 5 event types
 ├── gateway.yaml             # Gateway config for Waveshare ESP32-S3-POE-ETH-8DI-8DO
 ├── generate_nodes.py        # Python script: reads nodes.csv, generates per-node YAML configs
-├── nodes.csv                # Node registry: node_id, floor, room, board, location, gpio_list
+├── nodes.csv                # Node registry: floor, room, board, location, gpio_list
 └── nodes/                   # Generated node YAML files (one per board)
     ├── node000.yaml
     ├── node001.yaml
@@ -138,18 +143,19 @@ Note: the board ships as a kit with unsoldered through-hole components (terminal
 `generate_nodes.py` reads `nodes.csv` and produces one YAML file per board. The CSV schema:
 
 ```
-node_id,floor,room,board,location,gpio_list
-0,0,0,0,"Hallway entrance","2,3,4,5"
-1,0,1,0,"Kitchen left","2,3,4,5,6,7"
-10,1,9,0,"Master bedroom door","2,3,4,5"
+floor,room,board,location,gpio_list
+0,7,0,"Hallway entrance","20,21"
+0,8,0,"Kitchen left","20,21,22,23,24,25"
+1,9,0,"Master bedroom door","20,21"
 ```
 
-- `node_id` (0–511): flat CAN bus address, assigned manually. You can reserve ranges by convention (e.g. 0–49 ground floor, 50–99 first floor).
-- `floor`: metadata only (for display and grouping), not encoded in CAN ID.
-- `room`, `board`: carried in the payload so the gateway and HA know the physical location.
+- No `node_id` (ADR-0001): the address is `(room, board)`, encoded into the Extended ID.
+- `floor`: metadata only (for display and grouping), not encoded in the CAN ID.
+- `room`, `board` (0–255 each): the node's address; the pair **must be globally unique**.
 - `gpio_list`: comma-separated GPIO pin numbers for buttons on that board.
 
-The generator validates ranges, detects duplicate node IDs, and prints a CAN ID map grouped by floor.
+The generator validates room/board ranges, **rejects duplicate `(room, board)`**, prints a
+CAN ID map grouped by floor, and emits `node-r<room>-b<board>.yaml` files.
 
 ## Gateway → Home Assistant integration
 
@@ -178,12 +184,12 @@ event_data:
 ### HA services exposed
 
 **`esphome.canbus_gateway_canbus_send_output`** — send a command to a node:
-- `node_id`: int (0–511)
-- `subtype`: int (message sub-type)
+- `room`, `board`: int (0–255) — the target node's address
+- `subtype`: int (command type, 0–31; becomes the ID subtype field)
 - `param1`, `param2`: int (command parameters)
 
 **`esphome.canbus_gateway_canbus_send_config`** — send a config parameter:
-- `node_id`: int (0–511)
+- `room`, `board`: int (0–255) — the target node's address
 - `key`: int (config key)
 - `value`: int (uint16 value)
 

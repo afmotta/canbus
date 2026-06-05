@@ -33,38 +33,40 @@ api:
   encryption:
     key: !secret api_encryption_key
   services:
-    # Service: send an output command to a specific node.
-    # Uses send_data() in a lambda because canbus.send: can_id: is not templatable.
+    # Service: send an output command to a node, addressed by (room, board).
+    # gateway_id is hardcoded 0 for the POC (single gateway — see ADR-0001).
     - service: canbus_send_output
       variables:
-        node_id: int
+        room: int
+        board: int
         subtype: int
         param1: int
         param2: int
       then:
         - lambda: |-
-            auto err = id(can0).send_data(can_id(CAT_OUTPUT, (uint16_t) node_id), false,
-                {PROTO_V1, (uint8_t) subtype, (uint8_t) param1, (uint8_t) param2,
-                 0x00, 0x00, 0x00, 0x00});
+            auto err = id(can0).send_data(
+                can_output_id((uint8_t) room, (uint8_t) board, 0, (uint8_t) subtype), true,
+                {PROTO_V1, (uint8_t) param1, (uint8_t) param2});
             if (err != canbus::ERROR_OK) {
-              ESP_LOGW("gw", "canbus_send_output to node %d failed (err=%d)", node_id, (int) err);
+              ESP_LOGW("gw", "canbus_send_output to R%dB%d failed (err=%d)", room, board, (int) err);
             }
 
-    # Service: send a config parameter to a specific node.
-    # Uses send_data() in a lambda because canbus.send: can_id: is not templatable.
+    # Service: send a config parameter to a node, addressed by (room, board).
+    # The command type is the OUTPUT subtype; key/value travel in the payload.
     - service: canbus_send_config
       variables:
-        node_id: int
+        room: int
+        board: int
         key: int
         value: int
       then:
         - lambda: |-
-            auto err = id(can0).send_data(can_id(CAT_OUTPUT, (uint16_t) node_id), false,
-                {PROTO_V1, MSG_CONFIG_WRITE, (uint8_t) key,
-                 (uint8_t) ((value >> 8) & 0xFF), (uint8_t) (value & 0xFF),
-                 0x00, 0x00, 0x00});
+            auto err = id(can0).send_data(
+                can_output_id((uint8_t) room, (uint8_t) board, 0, SUBTYPE_CONFIG_WRITE), true,
+                {PROTO_V1, (uint8_t) key,
+                 (uint8_t) ((value >> 8) & 0xFF), (uint8_t) (value & 0xFF)});
             if (err != canbus::ERROR_OK) {
-              ESP_LOGW("gw", "canbus_send_config to node %d failed (err=%d)", node_id, (int) err);
+              ESP_LOGW("gw", "canbus_send_config to R%dB%d failed (err=%d)", room, board, (int) err);
             }
 
 ota:
@@ -74,51 +76,55 @@ ota:
 canbus:
   - platform: esp32_can
     id: can0
-    # Required default TX id = CAT_OUTPUT base (can_id(CAT_OUTPUT, 0) = 0x400).
+    use_extended_id: true
+    # Component default TX id = CAT_OUTPUT base (can_output_id(0,0,0,0) = 0x08000000).
     # Every command send_data() call sets an explicit can_id, so this is only the
     # component default and is never relied on for an actual frame.
-    can_id: 0x400
+    can_id: 0x08000000
     tx_pin: GPIO15
     rx_pin: GPIO16
     bit_rate: 125KBPS
     on_frame:
       # ---- All button events (CAT_INPUT = category 1) ----
-      - can_id: 0x200
-        can_id_mask: 0x600
+      # Identity (room/board/button/event) is decoded from can_id, not the payload.
+      - can_id: 0x04000000        # CAT_INPUT << 26
+        can_id_mask: 0x1C000000   # category bits only
+        use_extended_id: true
         then:
           - if:
               condition:
-                lambda: 'if (x.size() < CAN_FRAME_SIZE) return false; return x[0] == PROTO_V1 && payload_type(x) == MSG_BUTTON_EVENT;'
+                lambda: 'if (x.size() < INPUT_PAYLOAD_MIN) return false; return x[0] == PROTO_V1;'
               then:
                 - lambda: |-
                     ESP_LOGI("gw", "Button R%02uB%u btn%u %s",
-                             (unsigned) payload_room(x), (unsigned) payload_board(x),
-                             (unsigned) payload_button_index(x),
-                             event_type_str(payload_event_type(x)).c_str());
+                             (unsigned) id_room(can_id), (unsigned) id_board(can_id),
+                             (unsigned) id_button(can_id),
+                             event_type_str(id_event(can_id)).c_str());
                 # Only forward recognized event types to HA; unknown types are logged above but not fired.
                 - if:
                     condition:
-                      lambda: 'return event_type_str(payload_event_type(x)) != "unknown";'
+                      lambda: 'return event_type_str(id_event(can_id)) != "unknown";'
                     then:
                       - homeassistant.event:
                           event: esphome.canbus_button
                           data:
-                            room: !lambda 'return to_string(payload_room(x));'
-                            board: !lambda 'return to_string(payload_board(x));'
-                            button: !lambda 'return to_string(payload_button_index(x));'
-                            event: !lambda 'return std::string(event_type_str(payload_event_type(x)));'
+                            room: !lambda 'return to_string(id_room(can_id));'
+                            board: !lambda 'return to_string(id_board(can_id));'
+                            button: !lambda 'return to_string(id_button(can_id));'
+                            event: !lambda 'return std::string(event_type_str(id_event(can_id)));'
 
       # ---- All heartbeats (CAT_STATUS = category 3) ----
-      - can_id: 0x600
-        can_id_mask: 0x600
+      - can_id: 0x0C000000        # CAT_STATUS << 26
+        can_id_mask: 0x1C000000   # category bits only
+        use_extended_id: true
         then:
           - if:
               condition:
-                lambda: 'if (x.size() < CAN_FRAME_SIZE) return false; return x[0] == PROTO_V1;'
+                lambda: 'if (x.size() < STATUS_PAYLOAD_MIN) return false; return x[0] == PROTO_V1;'
               then:
                 - lambda: |-
-                    const uint8_t  room   = payload_room(x);
-                    const uint8_t  board  = payload_board(x);
+                    const uint8_t  room   = id_room(can_id);
+                    const uint8_t  board  = id_board(can_id);
                     const uint16_t uptime = payload_uptime16(x);
                     const uint8_t  errors = payload_errors(x);
                     if (errors != ERR_NONE) {
