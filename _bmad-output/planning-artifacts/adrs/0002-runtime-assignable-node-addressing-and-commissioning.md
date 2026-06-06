@@ -21,8 +21,14 @@ relatedDocuments:
 
 ## Status
 
-**Proposed** — recommended, pending Alberto's go/no-go and resolution of the open items in
-[Consequences](#consequences). **Depends on ADR-0001** (location-as-address Extended IDs).
+**Superseded by ADR-0007 (2026-06-06).** Under the flat-`node_id` + central-meaning-map
+model, identity is fixed at flash and never reassigned, so the runtime address-write/persist/
+reboot machinery this ADR specified is no longer needed. *Press-to-identify survives only as a
+map-building selector* (it populates the central map; it does not write the node). Retained for
+history; see ADR-0007.
+
+**~~Proposed~~** — pending Alberto's go/no-go and resolution of the open items in
+[Consequences](#consequences). Depended on ADR-0001 (location-as-address Extended IDs), also superseded.
 
 > **Rescoped 2026-06-04, superseded in part by ADR-0003.** This ADR originally covered
 > runtime-assignable addressing for *all* nodes — buttons **and** actuators — plus binding

@@ -19,10 +19,16 @@ relatedDocuments:
 
 ## Status
 
-**Proposed** — pending Alberto's acceptance. This ADR is a **consolidating record**: it does
-not introduce a new architecture, it closes out a critique whose conclusions are otherwise
-scattered (implicitly) across ADR-0001/0002/0003, and it makes the few micro-decisions that
-were never explicitly recorded.
+**Proposed — partly revised by ADR-0007 (2026-06-06).** Under the flat-`node_id` model two
+micro-decisions here flip: **D1 reverses** (`button`/`event` move back to the payload — there
+is no Extended ID to carry them), and **D3** priority sub-ordering is now by `node_id` within a
+category. The ADR's *core* conclusion strengthens: the KNX individual-address + central-map
+model (Hypothesis A) is now fully adopted (`node_id` = individual address; central map =
+function). The rest stands.
+
+This ADR is a **consolidating record**: it does not introduce a new architecture, it closes out
+a critique whose conclusions are otherwise scattered across ADR-0001/0002/0003, and it makes the
+few micro-decisions that were never explicitly recorded.
 
 ## Context
 
