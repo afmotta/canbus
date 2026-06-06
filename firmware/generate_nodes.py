@@ -7,14 +7,12 @@ Usage:
     2. Run: python generate_nodes.py
     3. Generated configs appear in nodes/
 
-CSV format (ADR-0001 — Extended IDs, location-as-address):
-    floor,room,board,location,gpio_list
-    0,7,0,"Ground floor hallway","20,21"
+CSV format:
+    node_id,floor,room,board,location,gpio_list
+    100,0,7,0,"Ground floor hallway","20,21"
 
-There is no node_id: a node's CAN address IS its (room, board), encoded directly into
-the 29-bit Extended ID. (room, board) MUST be unique across the whole registry — a
-duplicate is a physical address collision (two boards answering one ID), which this
-script rejects.
+node_id is the flat CAN bus address (0-399).
+floor/room/board are metadata carried in the payload for HA.
 """
 
 import csv
@@ -23,23 +21,25 @@ from pathlib import Path
 
 TEMPLATE = """\
 # =============================================================================
-# Node: {name} — Room {room}, Board {board}
+# Node: {name} — ID {node_id}
 # =============================================================================
 # Floor:    {floor_label}
 # Location: {location}
+# Room:     {room}, Board: {board}
 # Buttons:  {num_buttons} (GPIO {gpio_summary})
-# CAN IDs (29-bit Extended, location-as-address):
-#   Input  base = 0x{input_id:08X}  (CAT_INPUT,  node → gateway; button/event in low bits)
-#   Status      = 0x{status_id:08X}  (CAT_STATUS, node → gateway, heartbeat)
-#   Output RX   = 0x{output_id:08X}  (CAT_OUTPUT, gateway → node; mask 0x1FFFFC00)
+# CAN IDs:  Input  = 0x{input_id:03X}  (CAT_INPUT,  node → gateway, button events)
+#           Status = 0x{status_id:03X}  (CAT_STATUS, node → gateway, heartbeat)
+#           Output = 0x{output_id:03X}  (CAT_OUTPUT, gateway → node, commands / RX filter)
 # =============================================================================
 
 substitutions:
         node_name: "{name}"
+        node_id: "{node_id}"
         room_id: "{room}"
         board_id: "{board}"
-        output_can_id: "0x{output_id:08X}"
-        status_can_id: "0x{status_id:08X}"
+        input_can_id: "0x{input_id:03X}"
+        output_can_id: "0x{output_id:03X}"
+        status_can_id: "0x{status_id:03X}"
         debounce_ms: "50"
         can_cs_pin: "GPIO9"
         can_clk_pin: "GPIO2"
@@ -68,25 +68,14 @@ BUTTON_PKG = '  btn{idx}: !include {{ file: ../common/button.yaml, vars: {{ butt
 
 FLOOR_LABELS = {0: "Ground", 1: "First", 2: "Second", 3: "Third"}
 EXAMPLE_ROWS = [
-    ["floor", "room", "board", "location", "gpio_list"],
-    [0, 7, 0, "Ground floor hallway", "20,21"],
-    [0, 8, 0, "Ground floor living room", "20,21"],
+    ["node_id", "floor", "room", "board", "location", "gpio_list"],
+    [100, 0, 7, 0, "Ground floor hallway", "20,21"],
+    [101, 0, 8, 0, "Ground floor living room", "20,21"],
 ]
 
-# --------------- ID field shifts (must match canbus_protocol.h) ---------------
-CAT_SHIFT = 26
-ROOM_SHIFT = 18
-BOARD_SHIFT = 10
-CAT_INPUT, CAT_OUTPUT, CAT_STATUS = 1, 2, 3
 
-
-def can_addr(category: int, room: int, board: int) -> int:
-    """Shared high field [category][room][board] of the 29-bit Extended ID."""
-    return ((category & 0x07) << CAT_SHIFT) | ((room & 0xFF) << ROOM_SHIFT) | ((board & 0xFF) << BOARD_SHIFT)
-
-
-def node_name(room: int, board: int) -> str:
-    return f"node-r{room}-b{board}"
+def can_id(category: int, node_id: int) -> int:
+    return ((category & 0x03) << 9) | (node_id & 0x1FF)
 
 
 def main():
@@ -102,7 +91,7 @@ def main():
         print(f"  Seeded {csv_path} with current PoC example rows. Review and re-run.\n")
         return
 
-    seen_rb = {}
+    seen_node_ids = {}
     count = 0
     floor_groups = {}
 
@@ -112,14 +101,18 @@ def main():
             location = row["location"]
 
             try:
+                node_id = int(row["node_id"])
                 floor = int(row["floor"])
                 room = int(row["room"])
                 board = int(row["board"])
                 gpios = [int(g.strip()) for g in row["gpio_list"].split(",")]
-            except (ValueError, KeyError) as exc:
-                print(f"ERROR: Invalid/missing value on CSV row {reader.line_num}: {exc}", file=sys.stderr)
+            except ValueError as exc:
+                print(f"ERROR: Invalid integer value on CSV row {reader.line_num}: {exc}", file=sys.stderr)
                 sys.exit(1)
 
+            if not (0 <= node_id <= 399):
+                print(f"ERROR: Node ID {node_id} out of range (valid: 0–399)", file=sys.stderr)
+                sys.exit(1)
             if not (0 <= room <= 255):
                 print(f"ERROR: Room {room} out of range (valid: 0–255)", file=sys.stderr)
                 sys.exit(1)
@@ -127,29 +120,27 @@ def main():
                 print(f"ERROR: Board {board} out of range (valid: 0–255)", file=sys.stderr)
                 sys.exit(1)
             if len(gpios) > 6:
-                print(f"ERROR: Too many GPIOs for R{room}B{board}: max 6, got {len(gpios)}", file=sys.stderr)
+                print(f"ERROR: Too many GPIOs for node {node_id}: max 6, got {len(gpios)}", file=sys.stderr)
                 sys.exit(1)
             if len(set(gpios)) != len(gpios):
-                print(f"ERROR: Duplicate GPIO in R{room}B{board}: {row['gpio_list']}", file=sys.stderr)
+                print(f"ERROR: Duplicate GPIO in node {node_id}: {row['gpio_list']}", file=sys.stderr)
                 sys.exit(1)
 
-            # Load-bearing invariant (ADR-0001): (room, board) is the bus address and must
-            # be unique. A duplicate would be an address collision — two boards on one ID.
-            if (room, board) in seen_rb:
-                print(f"ERROR: Duplicate (room, board) = ({room}, {board}): "
-                      f"'{location}' vs '{seen_rb[(room, board)]}'", file=sys.stderr)
+            if node_id in seen_node_ids:
+                print(f"ERROR: Duplicate node_id {node_id}: '{location}' vs '{seen_node_ids[node_id]}'", file=sys.stderr)
                 sys.exit(1)
-            seen_rb[(room, board)] = location
+            seen_node_ids[node_id] = location
 
-            name = node_name(room, board)
-            input_id = can_addr(CAT_INPUT, room, board)
-            output_id = can_addr(CAT_OUTPUT, room, board)
-            status_id = can_addr(CAT_STATUS, room, board)
+            name = f"node{node_id:03d}"
+            input_id = can_id(1, node_id)
+            output_id = can_id(2, node_id)
+            status_id = can_id(3, node_id)
 
             button_lines = [BUTTON_PKG.format(idx=idx, gpio=gpio) for idx, gpio in enumerate(gpios)]
 
             yaml_content = TEMPLATE.format(
                 name=name,
+                node_id=node_id,
                 floor_label=FLOOR_LABELS.get(floor, f"Floor {floor}"),
                 room=room,
                 board=board,
@@ -166,17 +157,18 @@ def main():
             with open(out_path, "w") as yf:
                 yf.write(yaml_content)
 
-            floor_groups.setdefault(floor, []).append((room, board, location, len(gpios), output_id))
-            print(f"  ✓ {name}.yaml  OutRX=0x{output_id:08X}  R{room}B{board}  {len(gpios)} btn  [{location}]")
+            floor_groups.setdefault(floor, []).append((node_id, room, board, location, len(gpios)))
+            print(f"  ✓ {name}.yaml  CAN=0x{input_id:03X}  R{room}B{board}  {len(gpios)} btn  [{location}]")
             count += 1
 
     print(f"\nGenerated {count} node configs in {out_dir}/")
-    print("\n── CAN ID Map (Output RX filter base) ──")
+    print("\n── CAN ID Map ──")
     for floor in sorted(floor_groups):
         label = FLOOR_LABELS.get(floor, f"Floor {floor}")
         print(f"\n  {label} floor:")
-        for rm, bd, loc, nb, oid in sorted(floor_groups[floor]):
-            print(f"    R{rm:3d}B{bd:<3d}  Out=0x{oid:08X}  {nb} btn  {loc}")
+        for nid, rm, bd, loc, nb in sorted(floor_groups[floor]):
+            cid = can_id(1, nid)
+            print(f"    #{nid:3d}  0x{cid:03X}  R{rm}B{bd}  {nb} btn  {loc}")
 
 
 if __name__ == "__main__":

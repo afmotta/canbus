@@ -3,7 +3,7 @@
 # =============================================================================
 # Required vars: ${button_index}, ${button_gpio}
 # Required parent substitutions:
-#   ${node_name}, ${room_id}, ${board_id}, ${debounce_ms}
+#   ${node_name}, ${node_id}, ${room_id}, ${board_id}, ${debounce_ms}
 # =============================================================================
 
 script:
@@ -13,9 +13,8 @@ script:
     then:
       - lambda: |-
           ESP_LOGD("btn", "${node_name} btn${button_index}: %s", event_type_str(event_type).c_str());
-          auto err = id(can0).send_data(
-              can_input_id(${room_id}, ${board_id}, ${button_index}, event_type), true,
-              input_payload());
+          auto err = id(can0).send_data(can_id(CAT_INPUT, ${node_id}), false,
+              button_payload(${button_index}, event_type, ${room_id}, ${board_id}));
           if (err != canbus::ERROR_OK) {
             ESP_LOGW("btn", "${node_name} btn${button_index} TX failed (err=%d), event %s dropped",
                 (int) err, event_type_str(event_type).c_str());
