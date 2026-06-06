@@ -20,10 +20,12 @@ relatedDocuments:
 
 ## Status
 
-**Proposed** — pending Alberto's acceptance. Additive to ADR-0001 (uses reserved category
-space; no protocol break). The HVAC side (local HVAC control firmware) is **out of scope** —
-this ADR covers only **how environmental sensor data is carried over the CAN bus** and
-reaches the consumer.
+**Proposed — re-keyed by ADR-0007 (2026-06-06).** Under the flat-`node_id` model, sensor
+frames are keyed by **`node_id`** (`[CAT_SENSOR][node_id]`, standard 11-bit) with
+`measurement_type` + the value in the **payload**; the room is derived centrally from
+`node_id`. The category, measurement-type enum, and value-encoding table below are unchanged
+— only the addressing (was `[cat][room][board][measurement_type]`) moves to `node_id`. The
+HVAC side remains **out of scope**.
 
 ## Context
 
