@@ -46,12 +46,26 @@ The cleaner pattern — and the one this ADR adopts — is the classic device mo
 
 1. **Node identity = a single flat `node_id`**, assigned at flash time, carrying no meaning.
    **`room_id` / `board_id` are removed from the node entirely.**
-2. **ID structure reverts to standard 11-bit** `[category:2][node_id:9]` (512 nodes —
-   ample for a house); all content (button index, event type, sensor value, heartbeat
-   fields) lives in the 8-byte payload. This drops ADR-0001's Extended-ID layout and is the
-   original v1 ID structure **minus** the room/board payload fields (which also go away).
-   *(Width sub-decision: 9-bit node_id / standard frames is the simplest sufficient choice;
-   widen to Extended IDs only if 512 nodes is ever exceeded — it won't be.)*
+2. **ID structure: 29-bit Extended IDs** — `[category:4][node_id:13][low:12]`:
+   - **`category:4`** (16 message classes) — ends the 2-bit squeeze and gives clean homes to
+     `CAT_SENSOR` (ADR-0006, which has *no free slot* in the full 2-bit field), plus
+     `CONFIG/MGMT`, `DISCOVERY`, `BOOTLOADER`, and spares. The top field doubles as the
+     arbitration-priority ladder (order classes by urgency).
+   - **`node_id:13`** (8192) — the flat identity; source for node→controller frames,
+     destination for controller→node frames. Generous headroom (512 was already enough — this
+     is comfort, not need).
+   - **`low:12`** per-category — classification the CAN controllers can *hardware-filter* on:
+     - INPUT: `button:4` · `event:4` · rsvd
+     - SENSOR: `measurement_type:6` · rsvd
+     - OUTPUT/MGMT: `source_ctrl:3` (which controller — lighting vs HVAC) · `subtype:5` ·
+       `scope:2` (unicast/zone/broadcast) · rsvd
+     - STATUS/SYSTEM: flags · rsvd
+
+   This is Extended like ADR-0001 but with **`node_id`** semantics, *not* location — adopted
+   for message-class headroom, multi-controller source tagging, and hardware-filterable
+   fields, not for "location is the address." Values and heartbeat fields still travel in the
+   8-byte payload. (Exact category enum and low-field bit assignments are an implementation
+   detail for `canbus_protocol.h`.)
 3. **Meaning lives in a central map** on the controller/HA: `node_id → { room, board,
    behavior, bindings }`, defined and edited **after** install. The node never knows or
    stores its location.
@@ -78,6 +92,10 @@ The cleaner pattern — and the one this ADR adopts — is the classic device mo
   No config-write channel, no flash persistence, no reboot dance.
 - **Onboarding is pure map-building** — the problem is removed, not solved.
 - **No hashing, no collisions** — a script-allocated sequential id fits the ID directly.
+- **ID headroom without zero-sum trades** (Extended IDs) — a 4-bit category (room for
+  `CAT_SENSOR` and future classes), a `source_ctrl` tag so the lighting and HVAC controllers
+  can never emit colliding IDs, and in-ID `button`/`event`/`measurement_type` the CAN
+  controllers can hardware-filter on (and that make traces self-describing).
 - **Fits ADR-0003 and ADR-0004's KNX conclusion** — `node_id` = individual (physical)
   address; the central map = function assignment (KNX group/ETS). Fully realises the
   dual-identity split ADR-0004 was circling.
@@ -85,8 +103,13 @@ The cleaner pattern — and the one this ADR adopts — is the classic device mo
 - **Sensor-node identification solved** via the printed id (the gap that broke press-to-assign).
 
 ### Negative / costs
-- **Reverts ADR-0001** — the Extended-ID/location-as-address implementation (PR #6) is
-  abandoned; main's v1 `node_id` firmware is closer to this direction.
+- **Supersedes ADR-0001 but keeps Extended IDs.** ADR-0001's *location-as-address* Extended
+  implementation (PR #6) was reverted (PR #8); this ADR re-adopts Extended IDs with `node_id`
+  semantics for different reasons (above). Net firmware path: take main's post-revert v1
+  *standard-ID* firmware to **Extended IDs + node_id-only identity**.
+- **Extended-ID cost** — ~2–3 extra bytes on the wire per frame (negligible at 125 kbps with
+  sparse traffic) and a frozen one-way layout at LIVE. Extended ≠ bigger payload (that is
+  CAN FD; the MCP2515 nodes are classic CAN).
 - **The central map becomes critical config** — back it up; it is rebuildable (re-identify
   each node) but losing it loses all meaning until then. (Trade vs location-as-address,
   where a node self-described its room.)
@@ -100,12 +123,13 @@ The cleaner pattern — and the one this ADR adopts — is the classic device mo
 - **ADR-0001** → **Superseded.**
 - **ADR-0002** → **Superseded** (no runtime reassignment; press-to-identify survives only as
   a map-building selector, not a node write).
-- **ADR-0004** → revised: **D1 reversed** — button/event move **back to the payload**
-  (centralization removes the in-ID filtering rationale); **D3** priority sub-ordering is now
-  by `node_id` within a category (same benign acceptance). The KNX-alignment conclusion
-  strengthens.
-- **ADR-0006** → revised: sensor frames are keyed by **`node_id`** (`[CAT_SENSOR][node_id]`),
-  with `measurement_type` + value in the payload; room is derived centrally.
+- **ADR-0004** → revised: with Extended IDs there is room again, so **D1 holds as originally
+  written** — `button`/`event` live **in the ID** (hardware-filterable + self-describing);
+  **D3** priority sub-ordering is by `node_id` within a category. The KNX-alignment
+  conclusion strengthens.
+- **ADR-0006** → revised: `CAT_SENSOR` becomes a first-class **4-bit category**; sensor
+  frames are `[CAT_SENSOR][node_id][measurement_type:6]` with the value in the payload; room
+  is derived centrally.
 - **ADR-0003 / ADR-0005** → unaffected (controller is the central authority either way;
   `node_id` is globally unique, hence segment-agnostic across bridged buses).
 
@@ -115,13 +139,20 @@ The cleaner pattern — and the one this ADR adopts — is the classic device mo
   8-byte payload budget and a truncated/hashed id reintroduces collision math.
 - **Progressive temp-id + runtime reassignment (ADR-0002 staging).** Rejected — requires
   persist-over-CAN and write-then-reboot on wall-mounted boards.
-- **Flat `node_id` + central map (this).** Chosen — minimal node state, no reassignment, no
-  collisions, fits the centralized + KNX direction.
+- **Standard 11-bit IDs (`[category:2][node_id:9]`).** Considered — and briefly the
+  post-revert baseline — but **rejected**: the 2-bit category is already full, so
+  `CAT_SENSOR` (ADR-0006) has no slot, and every field is a zero-sum trade against `node_id`.
+  Extended IDs end the squeeze for ~2–3 bytes/frame.
+- **Flat `node_id` + central map + Extended IDs (this).** Chosen — minimal node state, no
+  reassignment, no collisions, ID headroom for classes/source-id/filtering; fits the
+  centralized + KNX direction.
 
 ## Open items
-1. Confirm the standard-11-bit / 9-bit-`node_id` width (vs Extended).
+1. **ID width: resolved → 29-bit Extended IDs** (Decision §2). Remaining detail: freeze the
+   exact `category` enum and the per-category low-12-bit assignments in `canbus_protocol.h`.
 2. Define the central-map schema + the controller's commissioning service (list/identify
    nodes, edit the map) and its backup.
 3. `node_id` allocation tooling (persistent counter / next-free) + label printing.
-4. Implementation: trim main's v1 payloads (drop room/board), re-key ADR-0006 sensors on
-   `node_id`, build the map + CLI/app. (Firmware delta is small relative to PR #6.)
+4. Implementation: move main's post-revert v1 *standard-ID* firmware to **Extended IDs**
+   (`use_extended_id`), 4-bit category incl. `CAT_SENSOR`, `node_id`-only identity (drop
+   room/board), per-category low fields; re-key ADR-0006 sensors; build the map + CLI/app.
