@@ -44,9 +44,25 @@ int main()
   assert(payload_uptime16(hb) == 1234);
   assert(payload_uptime16(heartbeat_payload(0xFFFF, ERR_NONE)) == 0xFFFF);
 
+  // --- sensor payload (CAT_SENSOR, ADR-0006): status + uint16 meas_type + int32 value ---
+  auto sp = sensor_payload(SENSOR_SHT45_TEMP, 2143 /* 21.43 C */);
+  assert(sp.size() == SENSOR_PAYLOAD_MIN);
+  assert(payload_version(sp) == PROTO_V1 && payload_sensor_status(sp) == SENSOR_STATUS_OK);
+  assert(payload_measurement_type(sp) == SENSOR_SHT45_TEMP);
+  assert(payload_sensor_value32(sp) == 2143);
+  // negative temperature survives the int32 round-trip
+  assert(payload_sensor_value32(sensor_payload(SENSOR_SEN66_TEMP, -512)) == -512);
+  // a non-OK status carries through
+  auto sw = sensor_payload(SENSOR_SEN66_CO2, 0, SENSOR_STATUS_WARMING_UP);
+  assert(payload_sensor_status(sw) == SENSOR_STATUS_WARMING_UP &&
+         payload_measurement_type(sw) == SENSOR_SEN66_CO2);
+  // CAT_SENSOR frame id is just can_id(CAT_SENSOR, node_id)
+  assert(can_id_category(can_id(CAT_SENSOR, 100)) == CAT_SENSOR);
+
   // --- short-frame guards return 0, never crash ---
   std::vector<uint8_t> empty;
   assert(payload_version(empty) == 0 && payload_uptime16(empty) == 0);
+  assert(payload_measurement_type(empty) == SENSOR_MEAS_INVALID && payload_sensor_value32(empty) == 0);
 
   // --- event strings ---
   assert(event_type_str(EVT_CLICK) == "click");

@@ -50,6 +50,7 @@ inline constexpr std::size_t CAN_FRAME_MAX = 8;
 inline constexpr std::size_t HEADER_MIN = 2;             // [ver, type]
 inline constexpr std::size_t BUTTON_PAYLOAD_MIN = 4;     // [ver, type, button, event]
 inline constexpr std::size_t HEARTBEAT_PAYLOAD_MIN = 5;  // [ver, type, errors, up_lo, up_hi]
+inline constexpr std::size_t SENSOR_PAYLOAD_MIN = 8;     // [ver, status, meas_lo, meas_hi, v0..v3]
 
 // --------------- Categories (ID bits 28:25, 4 bits) ---------------
 // Lower value = higher CAN arbitration priority. 0-3 retained from v1.
@@ -98,6 +99,29 @@ inline constexpr uint8_t ERR_NONE = 0x00;
 inline constexpr uint8_t ERR_CAN_TX_FAIL = 0x01;
 inline constexpr uint8_t ERR_CAN_BUS_OFF = 0x02;
 
+// --------------- Sensor measurement types (CAT_SENSOR, ADR-0006) ---------------
+// A uint16 in the payload that *implies* the value's encoding (see sensor_payload below).
+inline constexpr uint16_t SENSOR_MEAS_INVALID = 0;     // reserved
+inline constexpr uint16_t SENSOR_SHT45_TEMP = 1;       // int32, centi-degC (x100)
+inline constexpr uint16_t SENSOR_SHT45_RH = 2;         // uint32, x100 (0-10000 = 0-100%)
+inline constexpr uint16_t SENSOR_SEN66_TEMP = 3;       // int32, centi-degC
+inline constexpr uint16_t SENSOR_SEN66_RH = 4;         // uint32, x100
+inline constexpr uint16_t SENSOR_SEN66_PM1_0 = 5;      // uint32, x10 ug/m3
+inline constexpr uint16_t SENSOR_SEN66_PM2_5 = 6;      // uint32, x10 ug/m3
+inline constexpr uint16_t SENSOR_SEN66_PM4_0 = 7;      // uint32, x10 ug/m3
+inline constexpr uint16_t SENSOR_SEN66_PM10 = 8;       // uint32, x10 ug/m3
+inline constexpr uint16_t SENSOR_SEN66_VOC_INDEX = 9;  // uint32, 1-500
+inline constexpr uint16_t SENSOR_SEN66_NOX_INDEX = 10; // uint32, 1-500
+inline constexpr uint16_t SENSOR_SEN66_CO2 = 11;       // uint32, ppm
+// 12-65535 reserved.
+
+// --------------- Sensor status (payload byte 1) ---------------
+inline constexpr uint8_t SENSOR_STATUS_OK = 0;           // value valid; publish it
+inline constexpr uint8_t SENSOR_STATUS_WARMING_UP = 1;   // present, not ready; ignore value
+inline constexpr uint8_t SENSOR_STATUS_UNAVAILABLE = 2;  // no reading; ignore value
+inline constexpr uint8_t SENSOR_STATUS_ERROR = 3;        // sensor error; ignore value
+inline constexpr uint8_t SENSOR_STATUS_OUT_OF_RANGE = 4; // out of range; ignore value
+
 // =============================================================================
 // CAN ID helpers — 29-bit Extended IDs (send with use_extended_id = true)
 // =============================================================================
@@ -129,6 +153,20 @@ inline std::vector<uint8_t> heartbeat_payload(uint16_t uptime_hours, uint8_t err
           (uint8_t) (uptime_hours & 0xFF), (uint8_t) ((uptime_hours >> 8) & 0xFF)};
 }
 
+// Sensor (CAT_SENSOR): [ver, status, meas_lo, meas_hi, v0, v1, v2, v3] (ADR-0006).
+// measurement_type is a uint16 LE; value is a 32-bit LE quantity whose signed/unsigned
+// interpretation is implied by measurement_type (int32 for temperature; uint32 otherwise).
+// int32 covers every defined quantity, so the builder takes int32 raw.
+inline std::vector<uint8_t> sensor_payload(uint16_t measurement_type, int32_t value,
+                                           uint8_t status = SENSOR_STATUS_OK)
+{
+  uint32_t v = (uint32_t) value;
+  return {PROTO_V1, status,
+          (uint8_t) (measurement_type & 0xFF), (uint8_t) ((measurement_type >> 8) & 0xFF),
+          (uint8_t) (v & 0xFF), (uint8_t) ((v >> 8) & 0xFF),
+          (uint8_t) ((v >> 16) & 0xFF), (uint8_t) ((v >> 24) & 0xFF)};
+}
+
 // =============================================================================
 // Payload decoders — for controller/gateway use
 // =============================================================================
@@ -146,6 +184,20 @@ inline uint16_t payload_uptime16(const std::vector<uint8_t> &d)
 {
   if (d.size() < HEARTBEAT_PAYLOAD_MIN) return 0;
   return (uint16_t) d[3] | ((uint16_t) d[4] << 8);
+}
+
+// Sensor content — status at byte 1, measurement_type uint16 LE at 2-3, value int32 LE at 4-7.
+inline uint8_t payload_sensor_status(const std::vector<uint8_t> &d) { return d.size() > 1 ? d[1] : SENSOR_STATUS_UNAVAILABLE; }
+inline uint16_t payload_measurement_type(const std::vector<uint8_t> &d)
+{
+  if (d.size() < SENSOR_PAYLOAD_MIN) return SENSOR_MEAS_INVALID;
+  return (uint16_t) d[2] | ((uint16_t) d[3] << 8);
+}
+inline int32_t payload_sensor_value32(const std::vector<uint8_t> &d)
+{
+  if (d.size() < SENSOR_PAYLOAD_MIN) return 0;
+  return (int32_t) ((uint32_t) d[4] | ((uint32_t) d[5] << 8) |
+                    ((uint32_t) d[6] << 16) | ((uint32_t) d[7] << 24));
 }
 
 // Event type to string (for HA events)
