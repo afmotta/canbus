@@ -18,7 +18,7 @@ This document provides the complete epic and story breakdown for the CAN Bus Sma
 FR-1.1: Each node firmware SHALL detect 5 event types per button using ESPHome `on_multi_click`: single click, double click, triple click, long press (1–3 s), extra-long press (3+ s).
 FR-1.2: Multi-click patterns SHALL be ordered longest-first (triple → double → single → long → extra-long) to prevent shadowing.
 FR-1.3: Click timing thresholds are compile-time constants; runtime adjustment is out of scope.
-FR-1.4: Each node SHALL support up to 6 buttons per board. PoC uses [ASSUMPTION: 2 buttons per node — confirm from bench setup].
+FR-1.4: Each node SHALL support up to 8 buttons per board. Nodes standardize on the 8-button set (`btn0`–`btn7`) defined in `common/base_node.yaml`.
 
 FR-2.1: On each button event, the node SHALL transmit a CAN frame with CAN ID = `(CAT_INPUT << 9) | node_id` and the 8-byte button event payload.
 FR-2.2: The node SHALL validate `x.size() >= CAN_FRAME_SIZE` in all CAN frame receive lambdas before indexing any byte.

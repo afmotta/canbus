@@ -38,19 +38,20 @@ _Critical rules and patterns for implementing code in this project. Focus on uno
 
 ### Python (`generate_nodes.py`)
 
+- Generates the node files in `nodes/` from `nodes.csv` (the node registry). `nodes/` is generated output — do not hand-edit it.
+- Node files are now **minimal**: shared hardware config (SPI/CAN pins) and the standard 8-button set live in `common/base_node.yaml`, so each generated node carries only its identity (`node_name`/`node_id`/`debounce_ms`) plus `packages: base: !include ../common/base_node.yaml`.
 - Uses stdlib only (`csv`, `pathlib`) — do not add external dependencies.
-- The script validates: room/board 0–255, globally unique `(room, board)`, max 6 GPIOs per node, and no duplicate GPIOs within one node row. Add new validations here, not in the template string.
-- If `nodes.csv` is missing, the script seeds the current PoC example rows (nodes 100 and 101 on GPIO20/21) and exits before generating `nodes/` output.
-- Output files in `nodes/` are fully regenerated on each run — do not add logic there.
+- The script validates registry entries (e.g. room/board ranges, globally unique `(room, board)`). Add new validations here, not in the template string.
+- If `nodes.csv` is missing, the script seeds example rows (nodes 100 and 101) and exits before generating `nodes/` output.
 
 ### ESPHome Framework Rules
 
 **Package / include system:**
 
 - Shared config lives in `common/` as packages. Nodes include them via `packages:` + `!include`.
-- Per-button packages use the parameterized form:
-  `btn0: !include { file: ../common/button.yaml, vars: { button_index: "0", button_gpio: "2" } }`
-- All substitution variables (`${room_id}`, `${board_id}`, etc.) must be declared in the top-level `substitutions:` block of the node YAML before the `packages:` block.
+- The standard 8-button set is declared once in `common/base_node.yaml` (not per node file), using the parameterized form:
+  `btn0: !include { file: ../common/button.yaml, vars: { button_index: "0", button_gpio: "24" } }`
+- Node files declare only `node_name`, `node_id`, and `debounce_ms` in the top-level `substitutions:` block, before the `packages:` block.
 
 **CAN bus filtering (gateway):**
 
@@ -85,8 +86,7 @@ _Critical rules and patterns for implementing code in this project. Focus on uno
 
 **File naming:**
 
-- Node configs: `node-r<room>-b<board>.yaml` (e.g. `node-r7-b0.yaml`).
-- Generated files live in `nodes/` — never commit hand-edits to files in that directory.
+- Node configs: `node<id>.yaml` (e.g. `node100.yaml`) — generated output, one file per node.
 
 **C++ header conventions (`canbus_protocol.h`):**
 
@@ -115,8 +115,9 @@ _Critical rules and patterns for implementing code in this project. Focus on uno
 
 **Node provisioning workflow (always in this order):**
 
-1. Edit `nodes.csv` to add/update node entries.
-2. Run `python3 generate_nodes.py` to regenerate `nodes/`.
+1. Edit `nodes.csv` to add/update the node entry (node_id, room, board, location).
+2. Run `python3 generate_nodes.py` to regenerate `nodes/`. Generated node files are minimal —
+   all hardware config and the 8-button set come from `common/base_node.yaml`.
 3. Compile: `esphome compile nodes/node<id>.yaml`.
 4. Flash via USB: `esphome upload nodes/node<id>.yaml` before physical installation.
 5. Nodes cannot be updated wirelessly after installation — flashing is a one-shot operation.
@@ -134,15 +135,15 @@ _Critical rules and patterns for implementing code in this project. Focus on uno
 **Adding a new node type or new event:**
 
 1. Add constants to `canbus_protocol.h` first.
-2. Update `button.yaml` or create a new common package.
-3. Update `generate_nodes.py` template if new substitution variables are needed.
+2. Update `button.yaml` or `base_node.yaml` for shared node behavior (or create a new common package).
+3. Update the `generate_nodes.py` template only if new per-node substitution variables are needed.
 4. Update gateway `on_frame` handler and `event_type_str()` decoder.
 
 ### Critical Don't-Miss Rules
 
 **NEVER do these:**
 
-- **Never edit files in `nodes/` by hand.** They are generated output. All changes go through `nodes.csv` → `generate_nodes.py`.
+- **Never edit files in `nodes/` by hand.** They are generated output — all changes go through `nodes.csv` → `generate_nodes.py`. Shared config (SPI/CAN pins, the 8-button set) belongs in `common/base_node.yaml`, not in per-node files or the generator template.
 - **Never reintroduce the flat `node_id` / 11-bit ID model.** ADR-0001 is accepted: room, board, button, and event live in the 29-bit Extended CAN ID for INPUT frames; payloads carry protocol version, values, and parameters.
 - **Never assume HA event data fields are integers.** All fields in `esphome.canbus_button` and `esphome.canbus_heartbeat` are strings (`"7"`, not `7`). HA automation `event_data:` filters must use string values.
 - **Never skip the `x.size()` guard in CAN frame lambdas.** Malformed or short frames will crash without it.
@@ -160,7 +161,7 @@ _Critical rules and patterns for implementing code in this project. Focus on uno
 
 ## Usage Guidelines
 
-**For AI agents:** Read this file before implementing any code. Follow all rules exactly. When in doubt about CAN ID vs payload semantics, re-read the CAN ID section. Never touch `nodes/` directly.
+**For AI agents:** Read this file before implementing any code. Follow all rules exactly. When in doubt about CAN ID vs payload semantics, re-read the CAN ID section. Never touch `nodes/` directly — it is generated from `nodes.csv`.
 
 **For humans:** Update when hardware pins are verified, when protocol version bumps, or when new common packages are added. Remove rules that become obvious over time.
 

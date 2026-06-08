@@ -12,13 +12,6 @@ substitutions:
         node_name: "node101"
         node_id: "101"
         debounce_ms: "50"
-        can_cs_pin: "GPIO9"
-        can_clk_pin: "GPIO2"
-        can_mosi_pin: "GPIO3"
-        can_miso_pin: "GPIO4"
-        # No can_int_pin: the ESPHome mcp2515 component polls over SPI and exposes no
-        # interrupt-pin config. The hardware INT line is GPIO11 (see README OQ-2).
-        can_clock: "16MHZ"
 
 esphome:
   name: ${node_name}
@@ -32,5 +25,3 @@ logger:
 
 packages:
   base: !include ../common/base_node.yaml
-  btn0: !include { file: ../common/button.yaml, vars: { button_index: "0", button_gpio: "20" } }
-  btn1: !include { file: ../common/button.yaml, vars: { button_index: "1", button_gpio: "21" } }

@@ -98,13 +98,18 @@ functions only (no ODR violations across multiple includes).
 
 **Shared Config Mechanism:**
 ESPHome `packages:` + `!include { file, vars }` pattern for shared node behavior.
-`common/base_node.yaml` — SPI, MCP2515, heartbeat, command listener (shared across
-all nodes). `common/button.yaml` — parameterized per-button package (`button_index`,
-`button_gpio`).
+`common/base_node.yaml` — SPI, MCP2515, heartbeat, AND the standard 8-button set
+(`btn0`–`btn7`), hardcoded once and shared across all nodes. SPI/CAN pins are hardcoded
+here too (no per-node pin substitutions). `common/button.yaml` — parameterized
+per-button package (`button_index`, `button_gpio`), included 8× by `base_node.yaml`.
 
 **Code Generation Pipeline:**
 `generate_nodes.py` (Python stdlib only) reads `nodes.csv` → generates `nodes/*.yaml`.
-`nodes.csv` is the source of truth for physical hardware. `nodes/` is generated output.
+`nodes.csv` is the source of truth for physical hardware; `nodes/` is generated output.
+Because shared config (SPI/CAN pins, the 8-button set) now lives in `base_node.yaml`, each
+generated node file is **minimal** — only `node_name`/`node_id`/`debounce_ms` substitutions
+plus `packages: base: !include ../common/base_node.yaml`. All nodes are identical apart from
+their identity.
 
 **Platform Split:**
 Node configs: `rp2040` platform, `rpipico` board.
@@ -224,8 +229,8 @@ subsequent compiles use the pinned version.
 
 **Commissioning procedure (PoC, 2-node bench):**
 
-1. Edit `nodes.csv` with node entry (node_id in correct floor range, room, board, GPIOs)
-2. Run `python3 generate_nodes.py` — review CAN ID map for duplicates
+1. Edit `nodes.csv` with the node entry (node_id, room, board, location)
+2. Run `python3 generate_nodes.py` — review CAN ID map for duplicates. Generated node files are minimal; all hardware config and the 8-button set come from `base_node.yaml`
 3. `esphome compile nodes/node<id>.yaml` — must pass before flashing
 4. Flash via USB: `esphome upload nodes/node<id>.yaml`
 5. Power node; verify at least one heartbeat visible in ESPHome gateway log within 60s
@@ -243,7 +248,7 @@ subsequent compiles use the pinned version.
 **Cross-component dependencies:**
 
 - `canbus_protocol.h` is a compile-time dependency of both node and gateway firmware. Any change requires recompiling both.
-- `nodes.csv` schema change requires updating `generate_nodes.py` template and regenerating all node configs.
+- A change to shared node behavior (pins, the 8-button set) is made once in `common/base_node.yaml` and applies to all nodes. A `nodes.csv` schema/identity change requires re-running `generate_nodes.py` to regenerate the (minimal) node files.
 - Gateway HA event firing uses the documented `homeassistant.event:` YAML action; ESPHome version is still pinned after first compile for reproducibility, but no internal-API re-validation is required on upgrade.
 - The Extended-ID field layout is permanent after LIVE — changing it requires reflashing
   affected nodes. `(room, board)` collisions are address collisions and must be prevented by
@@ -366,10 +371,19 @@ or hardware-specific quirks.
 
 **Button package inclusion:**
 
+The standard 8-button set is declared once in `common/base_node.yaml` (not per node file):
+
 ```yaml
+# common/base_node.yaml
 packages:
-  btn0: !include { file: ../common/button.yaml, vars: { button_index: "0", button_gpio: "20" } }
-  btn1: !include { file: ../common/button.yaml, vars: { button_index: "1", button_gpio: "21" } }
+  btn0: !include { file: ../common/button.yaml, vars: { button_index: "0", button_gpio: "24" } }
+  btn1: !include { file: ../common/button.yaml, vars: { button_index: "1", button_gpio: "23" } }
+  btn2: !include { file: ../common/button.yaml, vars: { button_index: "2", button_gpio: "22" } }
+  btn3: !include { file: ../common/button.yaml, vars: { button_index: "3", button_gpio: "21" } }
+  btn4: !include { file: ../common/button.yaml, vars: { button_index: "4", button_gpio: "25" } }
+  btn5: !include { file: ../common/button.yaml, vars: { button_index: "5", button_gpio: "20" } }
+  btn6: !include { file: ../common/button.yaml, vars: { button_index: "6", button_gpio: "19" } }
+  btn7: !include { file: ../common/button.yaml, vars: { button_index: "7", button_gpio: "10" } }
 ```
 
 Button index and GPIO are always strings in the `vars` block (ESPHome substitution
@@ -377,15 +391,16 @@ variables are strings). The template casts them where needed.
 
 ### Code Generation Discipline
 
-**Never edit files in `firmware/nodes/`.** All changes go through:
+Node files in `firmware/nodes/` are generated output and minimal. **Never edit them by
+hand.** To add or change a node:
 
-1. Edit `firmware/nodes.csv`
-2. Run `python3 generate_nodes.py`
-3. Review the CAN ID map output for duplicate IDs before compiling
+1. Edit `firmware/nodes.csv` (node_id — the node's only flashed identity — plus room, board, location).
+2. Run `python3 generate_nodes.py`.
+3. Review the CAN ID map output for duplicate IDs before compiling.
 
-If a generated file needs a one-off change for debugging, make the change in
-`nodes.csv` or the template in `generate_nodes.py` — never directly in the
-generated output.
+Shared behavior (SPI/CAN pins, the 8-button set, heartbeat) belongs in `common/base_node.yaml`,
+not in individual node files or the generator template — that is what keeps the generated node
+files minimal and all nodes identical apart from identity.
 
 ### Node ID Assignment Rule
 
@@ -409,7 +424,7 @@ outside 0–399 or duplicates.
 - **C++ constants:** `UPPER_SNAKE_CASE` (e.g. `CAT_INPUT`, `EVT_CLICK`, `CAN_FRAME_SIZE`)
 - **C++ functions:** `snake_case` (e.g. `can_id()`, `button_payload()`, `event_type_str()`)
 - **Python identifiers:** `snake_case`; constants `UPPER_SNAKE_CASE`
-- **Generated node filenames:** `node{id:03d}.yaml` — zero-padded 3-digit ID
+- **Generated node filenames:** `node{id}.yaml` (e.g. `node100.yaml`) — one per node
 
 ### Enforcement Guidelines
 
@@ -424,7 +439,8 @@ outside 0–399 or duplicates.
 **Anti-patterns to flag in review:**
 
 - Raw hex or bit shifts in YAML lambdas (use protocol header)
-- Any hand-edit of files under `firmware/nodes/`
+- Per-node hardware config (SPI/CAN pins, button packages) instead of putting shared config in `common/base_node.yaml`
+- Any hand-edit of files under `firmware/nodes/` (they are generated — change `nodes.csv` and regenerate)
 - `x.size() == 0` or `x.empty()` as the frame guard (wrong bound)
 - ESPHome global introduced solely for event staging
 
@@ -447,9 +463,9 @@ canbus/                                  # project root
 │   ├── gateway.yaml                     # gateway firmware config
 │   ├── common/
 │   │   ├── canbus_protocol.h            # protocol constants & helpers (shared)
-│   │   ├── base_node.yaml               # shared node package: SPI, MCP2515, heartbeat
+│   │   ├── base_node.yaml               # shared node package: SPI, MCP2515, heartbeat, 8-button set
 │   │   └── button.yaml                  # per-button parameterized package
-│   └── nodes/                           # GENERATED — never edit directly
+│   └── nodes/                           # GENERATED (minimal files) — never edit directly
 │       ├── node100.yaml                 # ground floor nodes start at 100
 │       ├── node101.yaml
 │       └── ...
@@ -499,10 +515,10 @@ canbus/                                  # project root
 
 **Code generation boundary** (`firmware/nodes.csv` → `generate_nodes.py` → `firmware/nodes/`)
 
-- Input: CSV schema (node_id, floor, room, board, location, gpio_list)
-- Output: ESPHome YAML files with all substitutions resolved
-- Invariant: output is fully deterministic from input; running the script twice
-  produces identical output
+- Input: CSV registry (node_id, room, board, location)
+- Output: minimal ESPHome node YAML files (identity + `base_node.yaml` include); shared
+  config (SPI/CAN pins, the 8-button set) lives in `base_node.yaml`, not per node
+- Invariant: output is fully deterministic from input; running the script twice produces identical output
 
 ### Integration Points & Data Flow
 
@@ -567,9 +583,9 @@ esphome upload nodes/node100.yaml    # flash node via USB
 - Node ID ranges (100-399) fit within the 9-bit CAN ID space (0-511).
 
 **Pattern Consistency:** Implementation patterns align with all architectural decisions.
-Naming conventions are consistent across C++, ESPHome YAML, and Python. The
-code-generation discipline (never edit `nodes/`) is enforced at pattern and structure
-levels.
+Naming conventions are consistent across C++, ESPHome YAML, and Python. The code-generation
+discipline (never edit `nodes/`) is enforced at pattern and structure levels; generated node
+files are minimal because shared config (pins, the 8-button set) lives in `common/base_node.yaml`.
 
 **Structure Alignment:** `firmware/` directory and all sub-paths are consistent across
 decisions, patterns, and structure sections. Generated vs committed files are clearly

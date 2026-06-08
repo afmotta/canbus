@@ -33,16 +33,9 @@ TEMPLATE = """\
 # =============================================================================
 
 substitutions:
-        node_name: "{name}"
-        node_id: "{node_id}"
-        debounce_ms: "50"
-        can_cs_pin: "GPIO9"
-        can_clk_pin: "GPIO2"
-        can_mosi_pin: "GPIO3"
-        can_miso_pin: "GPIO4"
-        # No can_int_pin: the ESPHome mcp2515 component polls over SPI and exposes no
-        # interrupt-pin config. The hardware INT line is GPIO11 (see README OQ-2).
-        can_clock: "16MHZ"
+  node_name: "{name}"
+  node_id: "{node_id}"
+  debounce_ms: "50"
 
 esphome:
   name: ${{node_name}}

@@ -2,7 +2,7 @@
 
 ## Overview
 
-A CAN bus-based wall button system for Alberto's fienile (barn conversion) in Pioltello. The house has 3 floors (ground: 9 rooms, first: 8 rooms, second: 2 rooms) with up to 100+ button boards, each with up to 6 buttons. The system uses ESPHome on RP2040 button nodes and an ESP32-S3 gateway, communicating over CAN bus at 125 kbps.
+A CAN bus-based wall button system for Alberto's fienile (barn conversion) in Pioltello. The house has 3 floors (ground: 9 rooms, first: 8 rooms, second: 2 rooms) with up to 100+ button boards, each with a standard set of 8 buttons. The system uses ESPHome on RP2040 button nodes and an ESP32-S3 gateway, communicating over CAN bus at 125 kbps.
 
 ## Architecture
 
@@ -16,7 +16,7 @@ The button boards are walled in and hard to reach after installation. The RP2040
 
 ### Hardware
 
-**Button nodes:** Seeed Studio / Longan Labs CANBed RP2040 (SKU 102991596). An off-the-shelf CAN bus development board with RP2040 MCU, on-board MCP2515 CAN controller (SPI0, CS on GPIO9) and MCP2551 CAN transceiver. CAN interface via 4-pin screw terminal or DB9 connector, with switchable 120Ω termination resistor. Accepts 9–28V power input on the CAN connector (provides regulated 3.3V/1A). Exposes 8 digital I/O, 3 analog inputs, I2C (Grove), UART (Grove), and SPI. Up to 6 of the digital I/O pins are used for buttons. No WiFi, no OTA — flashed via USB (Micro-USB) before installation. ~$16 per board ($14 at 10+). Product link: https://www.seeedstudio.com/CANBed-RP2040-CAN-Bus-development-board-p-5262.html
+**Button nodes:** Seeed Studio / Longan Labs CANBed RP2040 (SKU 102991596). An off-the-shelf CAN bus development board with RP2040 MCU, on-board MCP2515 CAN controller (SPI0, CS on GPIO9) and MCP2551 CAN transceiver. CAN interface via 4-pin screw terminal or DB9 connector, with switchable 120Ω termination resistor. Accepts 9–28V power input on the CAN connector (provides regulated 3.3V/1A). Exposes 8 digital I/O, 3 analog inputs, I2C (Grove), UART (Grove), and SPI. The standard node firmware wires up 8 buttons. No WiFi, no OTA — flashed via USB (Micro-USB) before installation. ~$16 per board ($14 at 10+). Product link: https://www.seeedstudio.com/CANBed-RP2040-CAN-Bus-development-board-p-5262.html
 
 **Gateway:** Waveshare ESP32-S3-POE-ETH-8DI-8DO. Connects to Home Assistant via PoE Ethernet. Uses the ESP32-S3's native TWAI CAN controller (GPIO2 TX, GPIO3 RX) with the board's built-in isolated CAN transceiver. Also exposes 8 optocoupler-isolated digital inputs (GPIO4–11) and 8 digital outputs (via PCA9554 I2C expander at 0x20) for local use. The board has a W5500 Ethernet chip (SPI: CLK=GPIO15, MOSI=GPIO13, MISO=GPIO14, CS=GPIO16, INT=GPIO12, RST=GPIO39), a buzzer (GPIO46), and a WS2812 RGB LED (GPIO38).
 
@@ -52,7 +52,7 @@ The gateway uses CAN mask filtering (`can_id_mask: 0x600`) to match all messages
 ```
 Byte 0: Protocol version (0x01)
 Byte 1: Message type (0x01 = MSG_BUTTON_EVENT)
-Byte 2: Button index (0–5)
+Byte 2: Button index (0–7)
 Byte 3: Event type
          0x01 = click
          0x02 = double_click
@@ -87,16 +87,21 @@ ESPHome's `on_frame` CAN trigger provides the data bytes (`x`) but does not clea
 esphome_canbus/
 ├── common/
 │   ├── canbus_protocol.h    # C++ header: all constants, CAN ID helpers, payload builders/decoders
-│   ├── base_node.yaml       # Shared node package: SPI, MCP2515, heartbeat, output command listener
+│   ├── base_node.yaml       # Shared node package: SPI, MCP2515, heartbeat, AND the standard 8-button set
 │   └── button.yaml          # Per-button package: GPIO + on_multi_click with 5 event types
 ├── gateway.yaml             # Gateway config for Waveshare ESP32-S3-POE-ETH-8DI-8DO
 ├── generate_nodes.py        # Python script: reads nodes.csv, generates per-node YAML configs
 ├── nodes.csv                # Node registry: node_id, floor, room, board, location, gpio_list
 └── nodes/                   # Generated node YAML files (one per board)
-    ├── node000.yaml
-    ├── node001.yaml
+    ├── node100.yaml
+    ├── node101.yaml
     └── ...
 ```
+
+Each generated node file is minimal: it declares only `node_name`, `node_id`, and
+`debounce_ms` substitutions, the `esphome:`/`rp2040:`/`logger:` blocks, and `packages: base:
+!include ../common/base_node.yaml`. Everything else — SPI/CAN pins and the 8-button set —
+lives in `base_node.yaml`, so all nodes are identical apart from their `node_name`/`node_id`.
 
 ### Why the C++ header exists
 
@@ -104,12 +109,21 @@ ESPHome `!lambda` blocks are inline C++. Without the header, every lambda would 
 
 ### Per-button package pattern
 
-Each physical button is added to a node config via ESPHome's `!include` with `vars`:
+Every node carries the same standard set of **8 buttons** (`btn0`–`btn7`). These are
+declared once in `common/base_node.yaml`, so individual node files do not configure
+buttons at all — they just `!include` the base package:
 
 ```yaml
+# common/base_node.yaml
 packages:
-  btn0: !include { file: ../common/button.yaml, vars: { button_index: "0", button_gpio: "2" } }
-  btn1: !include { file: ../common/button.yaml, vars: { button_index: "1", button_gpio: "3" } }
+  btn0: !include { file: ../common/button.yaml, vars: { button_index: "0", button_gpio: "24" } }
+  btn1: !include { file: ../common/button.yaml, vars: { button_index: "1", button_gpio: "23" } }
+  btn2: !include { file: ../common/button.yaml, vars: { button_index: "2", button_gpio: "22" } }
+  btn3: !include { file: ../common/button.yaml, vars: { button_index: "3", button_gpio: "21" } }
+  btn4: !include { file: ../common/button.yaml, vars: { button_index: "4", button_gpio: "25" } }
+  btn5: !include { file: ../common/button.yaml, vars: { button_index: "5", button_gpio: "20" } }
+  btn6: !include { file: ../common/button.yaml, vars: { button_index: "6", button_gpio: "19" } }
+  btn7: !include { file: ../common/button.yaml, vars: { button_index: "7", button_gpio: "10" } }
 ```
 
 The `button.yaml` template creates a `binary_sensor` with `on_multi_click` handling all 5 event types. Click detection runs locally on the node (not on the gateway) because multi-click timing requires consistent millisecond-level precision that would be affected by CAN bus latency. The timing thresholds are compile-time constants in ESPHome's `on_multi_click` and cannot be changed at runtime.
@@ -118,16 +132,16 @@ Multi-click patterns are ordered longest-first (triple → double → single →
 
 ### CANBed RP2040 SPI pin mapping
 
-The MCP2515 CAN controller on the CANBed RP2040 is connected via SPI0. These pins are fixed by the board design (set as defaults in the generator, overridable via substitutions for other boards):
+The MCP2515 CAN controller on the CANBed RP2040 is connected via SPI0. These pins are fixed by the board design and are hardcoded directly in `common/base_node.yaml` (no longer passed as per-node substitutions):
 
 | Function | GPIO | Source |
 |----------|------|--------|
-| SPI CS   | GPIO9  | Confirmed — Longan Labs Arduino examples state `SPI_CS_PIN = 9` |
-| SPI SCK  | GPIO18 | RP2040 SPI0 default |
-| SPI MOSI | GPIO19 | RP2040 SPI0 default |
-| SPI MISO | GPIO16 | RP2040 SPI0 default |
-| INT      | GPIO20 | Needs verification from board schematic |
-| Clock    | 16MHZ  | Longan Labs MCP_CAN library defaults to 16MHz oscillator |
+| SPI CS   | GPIO9  | Confirmed — CANBed RP2040 V1.1 Eagle schematic (`CANCS`) |
+| SPI SCK  | GPIO2  | Confirmed — CANBed RP2040 V1.1 Eagle schematic (`SCK`) |
+| SPI MOSI | GPIO3  | Confirmed — CANBed RP2040 V1.1 Eagle schematic (`MOSI`) |
+| SPI MISO | GPIO4  | Confirmed — CANBed RP2040 V1.1 Eagle schematic (`MISO`) |
+| INT      | GPIO11 | Confirmed — schematic `INT` net. Not configured: the ESPHome `mcp2515` component polls over SPI and exposes no INT-pin option |
+| Clock    | 16MHZ  | Confirmed — schematic crystal `X1` value |
 
 The board exposes 8 digital I/O and 4 analog inputs (usable as digital) on the main 9x2 header, plus Grove connectors for I2C (Wire1) and UART (Serial1). The exact GPIO numbers for button-usable pins need to be confirmed from the pinout diagram (https://www.longan-labs.cc/media/wysiwyg/CAN-Bus/CANBed/Details_of_CANBed-04.png).
 
@@ -135,21 +149,36 @@ Note: the board ships as a kit with unsoldered through-hole components (terminal
 
 ### Node config generation
 
-`generate_nodes.py` reads `nodes.csv` and produces one YAML file per board. The CSV schema:
+`generate_nodes.py` reads `nodes.csv` and produces one minimal YAML file per board. Because
+all hardware config (SPI/CAN pins and the standard 8-button set) now lives in
+`common/base_node.yaml`, each generated node file only needs its identity and a single
+`!include`:
 
+```yaml
+substitutions:
+        node_name: "node100"
+        node_id: "100"
+        debounce_ms: "50"
+
+esphome:
+  name: ${node_name}
+  friendly_name: "Ground floor hallway"
+
+rp2040:
+  board: rpipico
+
+logger:
+  level: DEBUG
+
+packages:
+  base: !include ../common/base_node.yaml
 ```
-node_id,floor,room,board,location,gpio_list
-0,0,0,0,"Hallway entrance","2,3,4,5"
-1,0,1,0,"Kitchen left","2,3,4,5,6,7"
-10,1,9,0,"Master bedroom door","2,3,4,5"
-```
 
-- `node_id` (0–511): flat CAN bus address, assigned manually. You can reserve ranges by convention (e.g. 0–49 ground floor, 50–99 first floor).
-- `floor`: metadata only (for display and grouping), not encoded in CAN ID.
-- `room`, `board`: carried in the payload so the gateway and HA know the physical location.
-- `gpio_list`: comma-separated GPIO pin numbers for buttons on that board.
-
-The generator validates ranges, detects duplicate node IDs, and prints a CAN ID map grouped by floor.
+To add a node, add a row to `nodes.csv` and re-run `generate_nodes.py`. `node_id` is the
+node's only flashed identity (a flat value carried in the 29-bit Extended CAN ID per
+ADR-0007); room/board/location live in a central `node_id → {...}` map on the controller/HA,
+not on the node. Node files in `nodes/` are generated output — do not hand-edit them; put
+shared config in `base_node.yaml` instead.
 
 ## Gateway → Home Assistant integration
 
@@ -162,7 +191,7 @@ The gateway fires two HA event types:
 event_data:
   room: "7"       # string
   board: "2"      # string
-  button: "3"     # string (0-5)
+  button: "3"     # string (0-7)
   event: "click"  # click | double_click | triple_click | long_press | extra_long_press
 ```
 

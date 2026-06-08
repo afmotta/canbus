@@ -165,7 +165,7 @@ ESPHome's `on_frame` trigger does not cleanly expose the received CAN ID as a va
 
 **FR-1.3** Click timing thresholds are compile-time constants; runtime adjustment is out of scope.
 
-**FR-1.4** Each node SHALL support up to 6 buttons per board. The PoC uses [ASSUMPTION: 2 buttons per node — confirm actual GPIO count available on PoC bench setup].
+**FR-1.4** Each node SHALL support up to 8 buttons per board. Nodes standardize on the 8-button set (`btn0`–`btn7`) defined in `common/base_node.yaml`.
 
 ### FR-2: Node firmware — CAN transmission
 
