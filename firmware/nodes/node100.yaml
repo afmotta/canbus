@@ -1,23 +1,16 @@
 # =============================================================================
-# Node: node100 — ID 100
+# Node: node100 — node_id 100
 # =============================================================================
-# Floor:    Ground
-# Location: Ground floor hallway
-# Room:     7, Board: 0
+# (map-seed metadata, not flashed) Floor: Ground  Location: Ground floor hallway  Room 7 Board 0
 # Buttons:  2 (GPIO 20,21)
-# CAN IDs:  Input  = 0x264  (CAT_INPUT,  node → gateway, button events)
-#           Status = 0x664  (CAT_STATUS, node → gateway, heartbeat)
-#           Output = 0x464  (CAT_OUTPUT, gateway → node, commands / RX filter)
+# CAN IDs (29-bit Extended, computed at runtime from node_id):
+#   Input  = 0x02064000  (CAT_INPUT,  node -> controller, button events)
+#   Status = 0x06064000  (CAT_STATUS, node -> controller, heartbeat)
 # =============================================================================
 
 substitutions:
         node_name: "node100"
         node_id: "100"
-        room_id: "7"
-        board_id: "0"
-        input_can_id: "0x264"
-        output_can_id: "0x464"
-        status_can_id: "0x664"
         debounce_ms: "50"
         can_cs_pin: "GPIO9"
         can_clk_pin: "GPIO2"

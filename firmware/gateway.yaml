@@ -2,8 +2,12 @@
 # gateway.yaml — CAN Bus ↔ Home Assistant bridge
 # =============================================================================
 # Hardware: Waveshare ESP32-S3-RS485-CAN
-# Role:     Listens for CAN button events and heartbeats, fires HA events.
-#           Exposes an API service for HA to send commands to nodes.
+# Role:     Listens for CAN button events and heartbeats, fires HA events keyed by node_id.
+#           HA resolves node_id -> room/behaviour via the central map (ADR-0007).
+#
+# Flat node_id model (ADR-0007): identity is the node_id in the 29-bit Extended ID; all
+# content is in the payload. OUTPUT command / commissioning services are a later slice
+# (relay control is Modbus/API per ADR-0003), so this gateway is input-only for now.
 # =============================================================================
 
 esphome:
@@ -32,40 +36,7 @@ wifi:
 api:
   encryption:
     key: !secret api_encryption_key
-  services:
-    # Service: send an output command to a specific node.
-    # Uses send_data() in a lambda because canbus.send: can_id: is not templatable.
-    - service: canbus_send_output
-      variables:
-        node_id: int
-        subtype: int
-        param1: int
-        param2: int
-      then:
-        - lambda: |-
-            auto err = id(can0).send_data(can_id(CAT_OUTPUT, (uint16_t) node_id), false,
-                {PROTO_V1, (uint8_t) subtype, (uint8_t) param1, (uint8_t) param2,
-                 0x00, 0x00, 0x00, 0x00});
-            if (err != canbus::ERROR_OK) {
-              ESP_LOGW("gw", "canbus_send_output to node %d failed (err=%d)", node_id, (int) err);
-            }
-
-    # Service: send a config parameter to a specific node.
-    # Uses send_data() in a lambda because canbus.send: can_id: is not templatable.
-    - service: canbus_send_config
-      variables:
-        node_id: int
-        key: int
-        value: int
-      then:
-        - lambda: |-
-            auto err = id(can0).send_data(can_id(CAT_OUTPUT, (uint16_t) node_id), false,
-                {PROTO_V1, MSG_CONFIG_WRITE, (uint8_t) key,
-                 (uint8_t) ((value >> 8) & 0xFF), (uint8_t) (value & 0xFF),
-                 0x00, 0x00, 0x00});
-            if (err != canbus::ERROR_OK) {
-              ESP_LOGW("gw", "canbus_send_config to node %d failed (err=%d)", node_id, (int) err);
-            }
+  # OUTPUT command / commissioning services are added in the commissioning slice.
 
 ota:
   - platform: esphome
@@ -74,25 +45,27 @@ ota:
 canbus:
   - platform: esp32_can
     id: can0
-    # Required default TX id = CAT_OUTPUT base (can_id(CAT_OUTPUT, 0) = 0x400).
-    # Every command send_data() call sets an explicit can_id, so this is only the
-    # component default and is never relied on for an actual frame.
-    can_id: 0x400
+    use_extended_id: true
+    # Component default TX id = CAT_OUTPUT base. Every send sets an explicit can_id +
+    # use_extended_id, so this is only the component default and is never relied on.
+    can_id: 0x04000000
     tx_pin: GPIO15
     rx_pin: GPIO16
     bit_rate: 125KBPS
     on_frame:
-      # ---- All button events (CAT_INPUT = category 1) ----
-      - can_id: 0x200
-        can_id_mask: 0x600
+      # ---- All button events (CAT_INPUT) ----
+      # Identity (node_id) is decoded from the frame can_id; button/event from the payload.
+      - can_id: 0x02000000        # CAT_INPUT << CAT_SHIFT
+        can_id_mask: 0x1E000000   # CAN_MASK_CATEGORY (category bits only)
+        use_extended_id: true
         then:
           - if:
               condition:
-                lambda: 'if (x.size() < CAN_FRAME_SIZE) return false; return x[0] == PROTO_V1 && payload_type(x) == MSG_BUTTON_EVENT;'
+                lambda: 'if (x.size() < BUTTON_PAYLOAD_MIN) return false; return x[0] == PROTO_V1 && payload_type(x) == MSG_BUTTON_EVENT;'
               then:
                 - lambda: |-
-                    ESP_LOGI("gw", "Button R%02uB%u btn%u %s",
-                             (unsigned) payload_room(x), (unsigned) payload_board(x),
+                    ESP_LOGI("gw", "Button node=%u btn%u %s",
+                             (unsigned) can_id_node(can_id),
                              (unsigned) payload_button_index(x),
                              event_type_str(payload_event_type(x)).c_str());
                 # Only forward recognized event types to HA; unknown types are logged above but not fired.
@@ -103,28 +76,27 @@ canbus:
                       - homeassistant.event:
                           event: esphome.canbus_button
                           data:
-                            room: !lambda 'return to_string(payload_room(x));'
-                            board: !lambda 'return to_string(payload_board(x));'
+                            node_id: !lambda 'return to_string(can_id_node(can_id));'
                             button: !lambda 'return to_string(payload_button_index(x));'
                             event: !lambda 'return std::string(event_type_str(payload_event_type(x)));'
 
-      # ---- All heartbeats (CAT_STATUS = category 3) ----
-      - can_id: 0x600
-        can_id_mask: 0x600
+      # ---- All heartbeats (CAT_STATUS) ----
+      - can_id: 0x06000000        # CAT_STATUS << CAT_SHIFT
+        can_id_mask: 0x1E000000   # CAN_MASK_CATEGORY
+        use_extended_id: true
         then:
           - if:
               condition:
-                lambda: 'if (x.size() < CAN_FRAME_SIZE) return false; return x[0] == PROTO_V1;'
+                lambda: 'if (x.size() < HEARTBEAT_PAYLOAD_MIN) return false; return x[0] == PROTO_V1;'
               then:
                 - lambda: |-
-                    const uint8_t  room   = payload_room(x);
-                    const uint8_t  board  = payload_board(x);
+                    const unsigned node   = can_id_node(can_id);
                     const uint16_t uptime = payload_uptime16(x);
                     const uint8_t  errors = payload_errors(x);
                     if (errors != ERR_NONE) {
-                      ESP_LOGW("gw", "Node R%02uB%u uptime=%uh error=0x%02X",
-                               (unsigned) room, (unsigned) board, (unsigned) uptime, (unsigned) errors);
+                      ESP_LOGW("gw", "Node %u uptime=%uh error=0x%02X",
+                               node, (unsigned) uptime, (unsigned) errors);
                     } else {
-                      ESP_LOGD("gw", "Heartbeat R%02uB%u uptime=%uh error=0x%02X",
-                               (unsigned) room, (unsigned) board, (unsigned) uptime, (unsigned) errors);
+                      ESP_LOGD("gw", "Heartbeat node=%u uptime=%uh error=0x%02X",
+                               node, (unsigned) uptime, (unsigned) errors);
                     }
