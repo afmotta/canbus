@@ -20,12 +20,12 @@ relatedDocuments:
 
 ## Status
 
-**Proposed — re-keyed by ADR-0007 (2026-06-06).** Under the flat-`node_id` model with
-**Extended IDs**, `CAT_SENSOR` is a first-class **4-bit category** and sensor frames are
-`[CAT_SENSOR][node_id][measurement_type:6]` with the **value in the payload**; the room is
-derived centrally from `node_id`. The measurement-type enum and value-encoding table below are
-unchanged — only the addressing moves to `node_id` (and `measurement_type` into the ID). The
-HVAC side remains **out of scope**.
+**Proposed — re-keyed by ADR-0007 (2026-06-06).** Under the flat-`node_id` model (Extended IDs,
+`[category:4][node_id:13][reserved:12]`), `CAT_SENSOR` is a first-class **4-bit category** and
+sensor frames are `[CAT_SENSOR][node_id]` with `measurement_type` **and** the value **in the
+payload** (the ID's low bits stay reserved); the room is derived centrally from `node_id`. The
+measurement-type enum and value-encoding table below are unchanged — only the addressing moves
+to `node_id`. The HVAC side remains **out of scope**.
 
 ## Context
 

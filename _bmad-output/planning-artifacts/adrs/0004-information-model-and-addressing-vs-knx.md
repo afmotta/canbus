@@ -19,12 +19,13 @@ relatedDocuments:
 
 ## Status
 
-**Proposed — revised by ADR-0007 (2026-06-06).** Under the flat-`node_id` model with **Extended
-IDs**: **D1 stands** — `button`/`event` remain **in the ID** (the 29-bit Extended ID has room,
-and the fields are hardware-filterable + self-describing); **D3** priority sub-ordering is now
-by `node_id` within a category. The ADR's *core* conclusion strengthens: the KNX
-individual-address + central-map model (Hypothesis A) is now fully adopted (`node_id` =
-individual address; central map = function). The rest stands.
+**Proposed — revised by ADR-0007 (2026-06-06).** Under the flat-`node_id` model (Extended IDs,
+`[category:4][node_id:13][reserved:12]`): **D1 is set to payload** — `button`/`event` live **in
+the payload**, because the ID's low bits stay *reserved* (no consumer hardware-filters on them
+yet); they move into the ID only when one does. **D3** priority sub-ordering is by `node_id`
+within a category. The ADR's *core* conclusion strengthens: the KNX individual-address +
+central-map model (Hypothesis A) is now fully adopted (`node_id` = individual address; central
+map = function). The rest stands.
 
 This ADR is a **consolidating record**: it does not introduce a new architecture, it closes out
 a critique whose conclusions are otherwise scattered across ADR-0001/0002/0003, and it makes the

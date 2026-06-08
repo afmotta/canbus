@@ -46,26 +46,25 @@ The cleaner pattern — and the one this ADR adopts — is the classic device mo
 
 1. **Node identity = a single flat `node_id`**, assigned at flash time, carrying no meaning.
    **`room_id` / `board_id` are removed from the node entirely.**
-2. **ID structure: 29-bit Extended IDs** — `[category:4][node_id:13][low:12]`:
-   - **`category:4`** (16 message classes) — ends the 2-bit squeeze and gives clean homes to
-     `CAT_SENSOR` (ADR-0006, which has *no free slot* in the full 2-bit field), plus
-     `CONFIG/MGMT`, `DISCOVERY`, `BOOTLOADER`, and spares. The top field doubles as the
-     arbitration-priority ladder (order classes by urgency).
+2. **ID structure: 29-bit Extended IDs** — `[category:4][node_id:13][reserved:12]`, uniform
+   across all categories:
+   - **`category:4`** (16 values) — ends the 2-bit squeeze and gives clean slots + arbitration
+     priority to `SYSTEM, INPUT, OUTPUT, STATUS, SENSOR, CONFIG, DISCOVERY, BOOTLOADER`
+     (~8 used, ~8 spare, addable later with **no re-cut**). One value is reserved as
+     **`CAT_EXTENDED`** — an escape that defers the real class to a payload subtype byte, so
+     the field never needs widening even if classes ever exceed 16.
    - **`node_id:13`** (8192) — the flat identity; source for node→controller frames,
-     destination for controller→node frames. Generous headroom (512 was already enough — this
-     is comfort, not need).
-   - **`low:12`** per-category — classification the CAN controllers can *hardware-filter* on:
-     - INPUT: `button:4` · `event:4` · rsvd
-     - SENSOR: `measurement_type:6` · rsvd
-     - OUTPUT/MGMT: `source_ctrl:3` (which controller — lighting vs HVAC) · `subtype:5` ·
-       `scope:2` (unicast/zone/broadcast) · rsvd
-     - STATUS/SYSTEM: flags · rsvd
+     destination for controller→node frames. A house needs far less; this is comfort.
+   - **`reserved:12`** — held for future per-category low fields (e.g. in-ID `button`/`event`,
+     `measurement_type`, or a `source_ctrl` tag) **only once a concrete consumer can
+     hardware-filter on them**. No such consumer exists today (the central controller reads
+     every frame; bridges forward-all), so the low bits stay reserved rather than freezing
+     speculative sub-field widths at the LIVE one-way door.
 
-   This is Extended like ADR-0001 but with **`node_id`** semantics, *not* location — adopted
-   for message-class headroom, multi-controller source tagging, and hardware-filterable
-   fields, not for "location is the address." Values and heartbeat fields still travel in the
-   8-byte payload. (Exact category enum and low-field bit assignments are an implementation
-   detail for `canbus_protocol.h`.)
+   **All message content stays in the 8-byte payload** — button index, event type, sensor
+   value, command subtype, heartbeat fields. The ID carries only **category + node_id**. This
+   is Extended like ADR-0001 but with **`node_id`** semantics, *not* location — adopted for
+   category headroom (incl. `CAT_SENSOR`) and `node_id` room, not "location is the address."
 3. **Meaning lives in a central map** on the controller/HA: `node_id → { room, board,
    behavior, bindings }`, defined and edited **after** install. The node never knows or
    stores its location.
@@ -92,10 +91,11 @@ The cleaner pattern — and the one this ADR adopts — is the classic device mo
   No config-write channel, no flash persistence, no reboot dance.
 - **Onboarding is pure map-building** — the problem is removed, not solved.
 - **No hashing, no collisions** — a script-allocated sequential id fits the ID directly.
-- **ID headroom without zero-sum trades** (Extended IDs) — a 4-bit category (room for
-  `CAT_SENSOR` and future classes), a `source_ctrl` tag so the lighting and HVAC controllers
-  can never emit colliding IDs, and in-ID `button`/`event`/`measurement_type` the CAN
-  controllers can hardware-filter on (and that make traces self-describing).
+- **Category + node_id headroom (Extended IDs), no zero-sum trades** — a 4-bit category gives
+  `CAT_SENSOR` and future classes clean slots + priority (with a `CAT_EXTENDED` escape so the
+  field never needs widening), and `node_id` has ample room. In-ID per-category fields
+  (`button`/`event`, `measurement_type`, a `source_ctrl` tag) are **deferred to the reserved
+  bits** until a consumer can hardware-filter on them — not frozen speculatively now.
 - **Fits ADR-0003 and ADR-0004's KNX conclusion** — `node_id` = individual (physical)
   address; the central map = function assignment (KNX group/ETS). Fully realises the
   dual-identity split ADR-0004 was circling.
@@ -123,13 +123,12 @@ The cleaner pattern — and the one this ADR adopts — is the classic device mo
 - **ADR-0001** → **Superseded.**
 - **ADR-0002** → **Superseded** (no runtime reassignment; press-to-identify survives only as
   a map-building selector, not a node write).
-- **ADR-0004** → revised: with Extended IDs there is room again, so **D1 holds as originally
-  written** — `button`/`event` live **in the ID** (hardware-filterable + self-describing);
-  **D3** priority sub-ordering is by `node_id` within a category. The KNX-alignment
-  conclusion strengthens.
-- **ADR-0006** → revised: `CAT_SENSOR` becomes a first-class **4-bit category**; sensor
-  frames are `[CAT_SENSOR][node_id][measurement_type:6]` with the value in the payload; room
-  is derived centrally.
+- **ADR-0004** → revised: `button`/`event` live **in the payload** — the ID's low bits stay
+  reserved (no consumer hardware-filters on them yet), so they are not carried in the ID.
+  **D3** priority sub-ordering is by `node_id` within a category. KNX-alignment strengthens.
+- **ADR-0006** → revised: `CAT_SENSOR` is a first-class **4-bit category**; sensor frames are
+  `[CAT_SENSOR][node_id]` with `measurement_type` + value in the **payload**; room derived
+  centrally.
 - **ADR-0003 / ADR-0005** → unaffected (controller is the central authority either way;
   `node_id` is globally unique, hence segment-agnostic across bridged buses).
 
@@ -144,12 +143,13 @@ The cleaner pattern — and the one this ADR adopts — is the classic device mo
   `CAT_SENSOR` (ADR-0006) has no slot, and every field is a zero-sum trade against `node_id`.
   Extended IDs end the squeeze for ~2–3 bytes/frame.
 - **Flat `node_id` + central map + Extended IDs (this).** Chosen — minimal node state, no
-  reassignment, no collisions, ID headroom for classes/source-id/filtering; fits the
-  centralized + KNX direction.
+  reassignment, no collisions, category + `node_id` headroom; fits the centralized + KNX
+  direction.
 
 ## Open items
-1. **ID width: resolved → 29-bit Extended IDs** (Decision §2). Remaining detail: freeze the
-   exact `category` enum and the per-category low-12-bit assignments in `canbus_protocol.h`.
+1. **ID layout: resolved → 29-bit Extended `[category:4][node_id:13][reserved:12]`**
+   (Decision §2). Remaining detail: freeze the `category` enum (incl. `CAT_EXTENDED`) in
+   `canbus_protocol.h`; the low 12 bits stay **reserved** until a consumer needs them.
 2. Define the central-map schema + the controller's commissioning service (list/identify
    nodes, edit the map) and its backup.
 3. `node_id` allocation tooling (persistent counter / next-free) + label printing.
