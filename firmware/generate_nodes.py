@@ -79,6 +79,43 @@ def can_id(category: int, node_id: int) -> int:
     return ((category & 0x0F) << CAT_SHIFT) | ((node_id & 0x1FFF) << NODE_SHIFT)
 
 
+def _c_str(s: str) -> str:
+    """Escape a Python string for a C string literal."""
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def write_node_map(entries, path: Path) -> None:
+    """Emit the gateway's compiled central map: node_id -> {room, board, name} (ADR-0007)."""
+    rows = "\n".join(
+        f'    {{{nid}, {room}, {board}, "{_c_str(loc)}"}},'
+        for nid, room, board, loc in sorted(entries)
+    )
+    path.write_text(
+        "#pragma once\n"
+        "#include <cstdint>\n"
+        "#include <cstddef>\n\n"
+        "// =============================================================================\n"
+        "// node_map.h — GENERATED from nodes.csv by generate_nodes.py. DO NOT EDIT.\n"
+        "// Central node_id -> {room, board, name} map (ADR-0007), compiled into the gateway.\n"
+        "// An unknown node_id resolves to the sentinel (room/board 0xFF, name \"unknown\") —\n"
+        "// i.e. a node that is on the bus but not yet in the map (uncommissioned).\n"
+        "// =============================================================================\n\n"
+        "struct NodeMapEntry { uint16_t node_id; uint8_t room; uint8_t board; const char *name; };\n\n"
+        "inline constexpr uint8_t NODE_MAP_UNKNOWN = 0xFF;\n\n"
+        f"inline constexpr NodeMapEntry NODE_MAP[] = {{\n{rows}\n}};\n"
+        "inline constexpr std::size_t NODE_MAP_SIZE = sizeof(NODE_MAP) / sizeof(NODE_MAP[0]);\n\n"
+        "inline const NodeMapEntry *node_map_find(uint16_t node_id) {\n"
+        "  for (std::size_t i = 0; i < NODE_MAP_SIZE; i++)\n"
+        "    if (NODE_MAP[i].node_id == node_id) return &NODE_MAP[i];\n"
+        "  return nullptr;\n"
+        "}\n"
+        "inline bool node_map_known(uint16_t node_id) { return node_map_find(node_id) != nullptr; }\n"
+        "inline uint8_t node_map_room(uint16_t node_id) { auto e = node_map_find(node_id); return e ? e->room : NODE_MAP_UNKNOWN; }\n"
+        "inline uint8_t node_map_board(uint16_t node_id) { auto e = node_map_find(node_id); return e ? e->board : NODE_MAP_UNKNOWN; }\n"
+        "inline const char *node_map_name(uint16_t node_id) { auto e = node_map_find(node_id); return e ? e->name : \"unknown\"; }\n"
+    )
+
+
 def main():
     csv_path = Path(__file__).parent / "nodes.csv"
     out_dir = Path(__file__).parent / "nodes"
@@ -95,6 +132,7 @@ def main():
     seen_node_ids = {}
     count = 0
     floor_groups = {}
+    map_entries = []  # (node_id, room, board, location) -> compiled into the gateway's node_map.h
 
     with open(csv_path, newline="") as f:
         reader = csv.DictReader(f)
@@ -152,8 +190,13 @@ def main():
                 yf.write(yaml_content)
 
             floor_groups.setdefault(floor, []).append((node_id, room, board, location, len(gpios)))
+            map_entries.append((node_id, room, board, location))
             print(f"  ✓ {name}.yaml  Input=0x{input_id:08X}  node_id={node_id}  {len(gpios)} btn  [{location}]")
             count += 1
+
+    map_path = Path(__file__).parent / "common" / "node_map.h"
+    write_node_map(map_entries, map_path)
+    print(f"  ✓ {map_path.name}  (central node_id -> room/board/name map, compiled into the gateway)")
 
     print(f"\nGenerated {count} node configs in {out_dir}/")
     print("\n── CAN ID Map (Input id) ──")

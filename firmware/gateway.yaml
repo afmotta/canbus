@@ -15,6 +15,7 @@ esphome:
   friendly_name: "CAN Bus Gateway"
   includes:
     - common/canbus_protocol.h
+    - common/node_map.h   # GENERATED central node_id -> room/board/name map (ADR-0007)
 
 esp32:
   variant: esp32s3
@@ -76,7 +77,12 @@ canbus:
                       - homeassistant.event:
                           event: esphome.canbus_button
                           data:
+                            # node_id is the identity; room/board/name resolved from the
+                            # compiled central map (node_map.h). Unknown node -> 255/"unknown".
                             node_id: !lambda 'return to_string(can_id_node(can_id));'
+                            room: !lambda 'return to_string(node_map_room(can_id_node(can_id)));'
+                            board: !lambda 'return to_string(node_map_board(can_id_node(can_id)));'
+                            name: !lambda 'return std::string(node_map_name(can_id_node(can_id)));'
                             button: !lambda 'return to_string(payload_button_index(x));'
                             event: !lambda 'return std::string(event_type_str(payload_event_type(x)));'
 
@@ -91,12 +97,13 @@ canbus:
               then:
                 - lambda: |-
                     const unsigned node   = can_id_node(can_id);
+                    const char    *name   = node_map_name(node);
                     const uint16_t uptime = payload_uptime16(x);
                     const uint8_t  errors = payload_errors(x);
                     if (errors != ERR_NONE) {
-                      ESP_LOGW("gw", "Node %u uptime=%uh error=0x%02X",
-                               node, (unsigned) uptime, (unsigned) errors);
+                      ESP_LOGW("gw", "Node %u (%s) uptime=%uh error=0x%02X",
+                               node, name, (unsigned) uptime, (unsigned) errors);
                     } else {
-                      ESP_LOGD("gw", "Heartbeat node=%u uptime=%uh error=0x%02X",
-                               node, (unsigned) uptime, (unsigned) errors);
+                      ESP_LOGD("gw", "Heartbeat node=%u (%s) uptime=%uh error=0x%02X",
+                               node, name, (unsigned) uptime, (unsigned) errors);
                     }
