@@ -6,11 +6,15 @@ esphome:
     priority: -100
     then:
       - lambda: |-
-          auto make_event_string = static_cast<std::string (*)(uint8_t)>(event_type_str);
-          const auto frame_id = can_id(CAT_INPUT, 1);
-          const auto payload = button_payload(0, EVT_TRIPLE_CLICK, 1, 2);
-          const auto event_name = make_event_string(EVT_EXTRA_LONG_PRESS);
-          if (payload.size() != CAN_FRAME_SIZE || frame_id == 0 || event_name.empty()) {
+          // Protocol self-check (ADR-0007 Extended IDs, node_id-only) — gateway decode path.
+          const uint32_t fid = can_id(CAT_INPUT, 101);
+          const bool id_ok = can_id_category(fid) == CAT_INPUT && can_id_node(fid) == 101 &&
+                             (fid & CAN_MASK_CATEGORY) == (uint32_t) (CAT_INPUT << CAT_SHIFT);
+          const auto bp = button_payload(2, EVT_TRIPLE_CLICK);
+          const bool pl_ok = bp.size() >= BUTTON_PAYLOAD_MIN &&
+                             payload_button_index(bp) == 2 &&
+                             event_type_str(payload_event_type(bp)) == "triple_click";
+          if (!id_ok || !pl_ok || event_type_str(EVT_EXTRA_LONG_PRESS).empty()) {
             ESP_LOGE("protocol", "protocol self-check FAIL");
           }
 

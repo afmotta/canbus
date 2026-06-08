@@ -5,54 +5,74 @@
 #include <cstddef>
 
 // =============================================================================
-// CAN Bus Smart Home Protocol v1
+// CAN Bus Smart Home Protocol v1 — flat node_id, 29-bit Extended IDs (ADR-0007)
 // =============================================================================
 //
-// CAN ID structure (standard 11-bit):
+// 29-bit Extended CAN ID, uniform across all categories:
 //
-//   Bit:  10  9 │ 8  7  6  5  4  3  2  1  0
-//         C   C │ N  N  N  N  N  N  N  N  N
+//   Bit: 28 27 26 25 │ 24 .............. 12 │ 11 ............. 0
+//        C  C  C  C   │ N  N  ........  N     │ r  r  ........  r
 //
-//   C = Category (2 bits, 0-3)  — bus arbitration priority (lower = higher)
-//   N = Node ID  (9 bits, 0-511) — flat, sequential, assigned in registry
+//   C = category (4 bits, 0-15)   — message class + arbitration priority (lower = higher)
+//   N = node_id  (13 bits, 0-8191) — flat, meaningless, assigned at flash time
+//   r = reserved (12 bits)         — future per-category low fields; MUST be 0 for now
 //
-// Capacity: 512 unique nodes
+// A node's identity is its flat node_id. (room, board, behaviour) live in a central
+// node_id -> {...} map on the controller/HA (ADR-0007) — never on the node. The CAN ID
+// carries only the message class + node_id; ALL message content lives in the payload.
 //
-// All semantic meaning (room, board, button, event) lives in the payload.
-// The CAN ID only provides uniqueness for arbitration and category filtering.
+// Node -> controller payloads (uniform [version][type] header, then content):
+//   Byte 0:  protocol version
+//   Byte 1:  message type
+//   Byte 2+: message-specific content
+//     INPUT  (button):    [ver, MSG_BUTTON_EVENT, button_index, event_type]
+//     STATUS (heartbeat): [ver, MSG_HEARTBEAT, error_flags, uptime_lo, uptime_hi]  (uint16 LE)
 //
-// Node → gateway payload (8 bytes) — uniform [version][type] header, then identity:
-//   Byte 0:   Protocol version
-//   Byte 1:   Message type
-//   Byte 2:   Room ID   (0-255)  — sender identity, same offset for every node→gateway frame
-//   Byte 3:   Board ID  (0-255)  — sender identity, same offset for every node→gateway frame
-//   Byte 4-6: Message-specific content (trails identity, contiguous with the reserved tail)
-//   Byte 7:   Reserved
+// Controller -> node (OUTPUT) payloads carry command/config params: [ver, subtype, ...];
+// the node_id in the ID addresses the target (defined by the controller in a later slice).
 //
-//   Button event content: Byte 4 = button index, Byte 5 = event type      (6-7 reserved)
-//   Heartbeat content:    Byte 4 = error flags,  Byte 5-6 = uptime hours (uint16 LE), 7 reserved
-//
-// Gateway → node payload (8 bytes) carries command params, not room/board — the CAN ID
-// already addresses the target node:  [version, subtype/type, p1, p2, ...].
+// Scope of this header (PR-A): the ID framework + the node TX path (button + heartbeat).
+// Sensors (CAT_SENSOR, ADR-0006) and the OUTPUT command set land in later slices; the
+// reserved low 12 bits stay 0 until a consumer needs to hardware-filter on them.
 // =============================================================================
 
 // --------------- Protocol version ---------------
 // Versioning policy: until the project is declared LIVE, PROTO_V1 stays 0x01 and breaking
-// payload changes are absorbed in place (every node is reflashed in lock-step with the
-// gateway — there is no fielded firmware to stay compatible with). Going live is Alberto's
-// explicit call; only after that does any breaking payload change require a version bump.
+// changes are absorbed in place (every node is reflashed in lock-step — there is no fielded
+// firmware to stay compatible with). Going live is Alberto's call; only after that does a
+// breaking change require a version bump.
 inline constexpr uint8_t PROTO_V1 = 0x01;
-// size_t so comparisons against std::vector::size() are exact (no implicit promotion).
-inline constexpr std::size_t CAN_FRAME_SIZE = 8;
 
-// --------------- Categories (bits 10:9) ---------------
-inline constexpr uint8_t CAT_SYSTEM = 0; // Emergency, errors       (highest priority)
-inline constexpr uint8_t CAT_INPUT = 1;  // Button events            node → gateway
-inline constexpr uint8_t CAT_OUTPUT = 2; // LED/relay commands       gateway → node
-inline constexpr uint8_t CAT_STATUS = 3; // Heartbeat, health        node → gateway
+// Frame sizing. Content moved into the ID-addressed/short payloads, so frames are <= 8 bytes
+// and variable-length; receive lambdas guard against the relevant per-message minimum rather
+// than a fixed 8 (named constants, never inlined — NFR-2).
+inline constexpr std::size_t CAN_FRAME_MAX = 8;
+inline constexpr std::size_t HEADER_MIN = 2;             // [ver, type]
+inline constexpr std::size_t BUTTON_PAYLOAD_MIN = 4;     // [ver, type, button, event]
+inline constexpr std::size_t HEARTBEAT_PAYLOAD_MIN = 5;  // [ver, type, errors, up_lo, up_hi]
 
-// CAN ID mask: match category bits only (bits 10:9)
-inline constexpr uint32_t CAN_MASK_CATEGORY = 0x600;
+// --------------- Categories (ID bits 28:25, 4 bits) ---------------
+// Lower value = higher CAN arbitration priority. 0-3 retained from v1.
+inline constexpr uint8_t CAT_SYSTEM = 0;   // emergency, errors, controller liveness (highest)
+inline constexpr uint8_t CAT_INPUT = 1;    // button events             node -> controller
+inline constexpr uint8_t CAT_OUTPUT = 2;   // commands / management     controller -> node
+inline constexpr uint8_t CAT_STATUS = 3;   // heartbeat, health         node -> controller
+inline constexpr uint8_t CAT_SENSOR = 4;   // environmental (ADR-0006)  node -> controller (low priority)
+// Values 5-14 are reserved for future message classes (e.g. CONFIG, DISCOVERY, BOOTLOADER);
+// assign them when those slices are designed.
+inline constexpr uint8_t CAT_EXTENDED = 15; // escape: real class is a subtype byte in the payload
+
+// --------------- ID field layout ---------------
+inline constexpr uint8_t CAT_SHIFT = 25;
+inline constexpr uint8_t NODE_SHIFT = 12;
+inline constexpr uint32_t CAT_FIELD_MASK = 0x0Fu;    // 4 bits
+inline constexpr uint32_t NODE_FIELD_MASK = 0x1FFFu; // 13 bits
+
+// Match category bits only (controller/gateway category-mask acceptance filter).
+inline constexpr uint32_t CAN_MASK_CATEGORY = CAT_FIELD_MASK << CAT_SHIFT;  // 0x1E000000
+// Match category + node_id (a node's RX filter for OUTPUT frames addressed to it; used later).
+inline constexpr uint32_t CAN_MASK_ADDR =
+    (CAT_FIELD_MASK << CAT_SHIFT) | (NODE_FIELD_MASK << NODE_SHIFT);
 
 // --------------- Message types (payload byte 1) ---------------
 inline constexpr uint8_t MSG_BUTTON_EVENT = 0x01;
@@ -60,7 +80,7 @@ inline constexpr uint8_t MSG_HEARTBEAT = 0x01;
 inline constexpr uint8_t MSG_CONFIG_WRITE = 0x02;
 inline constexpr uint8_t MSG_CONFIG_ACK = 0x03;
 
-// --------------- Button event types (payload byte 3) ---------------
+// --------------- Button event types (payload) ---------------
 inline constexpr uint8_t EVT_CLICK = 0x01;
 inline constexpr uint8_t EVT_DOUBLE_CLICK = 0x02;
 inline constexpr uint8_t EVT_TRIPLE_CLICK = 0x03;
@@ -73,65 +93,59 @@ inline constexpr uint8_t EVT_TRIPLE = EVT_TRIPLE_CLICK;
 inline constexpr uint8_t EVT_LONG = EVT_LONG_PRESS;
 inline constexpr uint8_t EVT_EXTRA_LONG = EVT_EXTRA_LONG_PRESS;
 
-// --------------- Error flags (heartbeat byte 4) ---------------
+// --------------- Error flags (heartbeat) ---------------
 inline constexpr uint8_t ERR_NONE = 0x00;
 inline constexpr uint8_t ERR_CAN_TX_FAIL = 0x01;
 inline constexpr uint8_t ERR_CAN_BUS_OFF = 0x02;
 
 // =============================================================================
-// CAN ID helpers
+// CAN ID helpers — 29-bit Extended IDs (send with use_extended_id = true)
 // =============================================================================
 
 inline uint32_t can_id(uint8_t category, uint16_t node_id)
 {
-  return (static_cast<uint32_t>(category & 0x03) << 9) | (node_id & 0x1FF);
+  return ((static_cast<uint32_t>(category) & CAT_FIELD_MASK) << CAT_SHIFT) |
+         ((static_cast<uint32_t>(node_id) & NODE_FIELD_MASK) << NODE_SHIFT);
 }
 
-inline uint8_t can_id_category(uint32_t id) { return (id >> 9) & 0x03; }
-inline uint16_t can_id_node(uint32_t id) { return id & 0x1FF; }
+inline uint8_t can_id_category(uint32_t id) { return (id >> CAT_SHIFT) & CAT_FIELD_MASK; }
+inline uint16_t can_id_node(uint32_t id) { return (id >> NODE_SHIFT) & NODE_FIELD_MASK; }
 
 // =============================================================================
-// Payload builders — all return 8-byte vectors
-// Room and board identify the sender; node_id is only in the CAN header.
+// Payload builders — identity is the node_id in the ID; content is in the payload
 // =============================================================================
 
-// Button event: [ver, type, room, board, button, event, 0, 0]
-inline std::vector<uint8_t> button_payload(uint8_t button_index, uint8_t event_type,
-                                           uint8_t room_id, uint8_t board_id)
+// Button event: [ver, type, button_index, event_type].
+inline std::vector<uint8_t> button_payload(uint8_t button_index, uint8_t event_type)
 {
-  return {PROTO_V1, MSG_BUTTON_EVENT, room_id, board_id, button_index, event_type, 0x00, 0x00};
+  return {PROTO_V1, MSG_BUTTON_EVENT, button_index, event_type};
 }
 
-// Heartbeat: [ver, type, room, board, errors, uptime_lo, uptime_hi, 0]
-// uptime_hours is a little-endian uint16 (bytes 5-6); 0xFFFF means "at least 65535 h".
-inline std::vector<uint8_t> heartbeat_payload(uint16_t uptime_hours,
-                                              uint8_t error_flags, uint8_t room_id, uint8_t board_id)
+// Heartbeat: [ver, type, error_flags, uptime_lo, uptime_hi].
+// uptime_hours is a little-endian uint16 (bytes 3-4); 0xFFFF means "at least 65535 h".
+inline std::vector<uint8_t> heartbeat_payload(uint16_t uptime_hours, uint8_t error_flags)
 {
-  return {PROTO_V1, MSG_HEARTBEAT, room_id, board_id, error_flags,
-          (uint8_t) (uptime_hours & 0xFF), (uint8_t) ((uptime_hours >> 8) & 0xFF), 0x00};
+  return {PROTO_V1, MSG_HEARTBEAT, error_flags,
+          (uint8_t) (uptime_hours & 0xFF), (uint8_t) ((uptime_hours >> 8) & 0xFF)};
 }
 
 // =============================================================================
-// Payload decoders — for gateway use
+// Payload decoders — for controller/gateway use
 // =============================================================================
 
 inline uint8_t payload_version(const std::vector<uint8_t> &d) { return d.size() > 0 ? d[0] : 0; }
 inline uint8_t payload_type(const std::vector<uint8_t> &d) { return d.size() > 1 ? d[1] : 0; }
 
-// Sender identity — same offset for every node→gateway frame (button + heartbeat).
-inline uint8_t payload_room(const std::vector<uint8_t> &d) { return d.size() > 2 ? d[2] : 0; }
-inline uint8_t payload_board(const std::vector<uint8_t> &d) { return d.size() > 3 ? d[3] : 0; }
+// Button-event content (after the [ver, type] header).
+inline uint8_t payload_button_index(const std::vector<uint8_t> &d) { return d.size() > 2 ? d[2] : 0; }
+inline uint8_t payload_event_type(const std::vector<uint8_t> &d) { return d.size() > 3 ? d[3] : 0; }
 
-// Button-event content
-inline uint8_t payload_button_index(const std::vector<uint8_t> &d) { return d.size() > 4 ? d[4] : 0; }
-inline uint8_t payload_event_type(const std::vector<uint8_t> &d) { return d.size() > 5 ? d[5] : 0; }
-
-// Heartbeat content — uptime is a little-endian uint16 spanning bytes 5-6.
-inline uint8_t payload_errors(const std::vector<uint8_t> &d) { return d.size() > 4 ? d[4] : 0; }
+// Heartbeat content — errors at byte 2, uptime a little-endian uint16 at bytes 3-4.
+inline uint8_t payload_errors(const std::vector<uint8_t> &d) { return d.size() > 2 ? d[2] : 0; }
 inline uint16_t payload_uptime16(const std::vector<uint8_t> &d)
 {
-  if (d.size() < 7) return 0;
-  return (uint16_t) d[5] | ((uint16_t) d[6] << 8);
+  if (d.size() < HEARTBEAT_PAYLOAD_MIN) return 0;
+  return (uint16_t) d[3] | ((uint16_t) d[4] << 8);
 }
 
 // Event type to string (for HA events)
