@@ -107,3 +107,13 @@ canbus:
                       ESP_LOGD("gw", "Heartbeat node=%u (%s) uptime=%uh error=0x%02X",
                                node, name, (unsigned) uptime, (unsigned) errors);
                     }
+                # Discovery: an unknown node_id heartbeating is a live, uncommissioned node —
+                # surface it to HA so the operator can identify (press its button) and commission it.
+                - if:
+                    condition:
+                      lambda: 'return !node_map_known(can_id_node(can_id));'
+                    then:
+                      - homeassistant.event:
+                          event: esphome.canbus_node_unknown
+                          data:
+                            node_id: !lambda 'return to_string(can_id_node(can_id));'
