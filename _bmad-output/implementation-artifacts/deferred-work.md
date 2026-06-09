@@ -49,3 +49,7 @@
 ## Deferred from: code review of 2-1-base-node-configuration-spi-and-mcp2515-setup.md (2026-06-01)
 
 - `can_int_pin` substitution is generated in node YAMLs but not consumed by `canbus.mcp2515` config in `firmware/common/base_node.yaml`; keep as deferred pre-existing cleanup until platform support or template strategy is revisited.
+
+## Deferred from: code review of spec-commission-interactive-cli.md (2026-06-09)
+
+- **`(room, board)` uniqueness is enforced nowhere** [`firmware/tools/generate_nodes.py`, `firmware/tools/commission.py`] — `generate_nodes.main()` validates `node_id` uniqueness/range and integer-ness only; it does NOT reject two nodes sharing the same `(room, board)`. `commission.py` (both the `assign` subcommand and the new interactive flow) likewise does not check it. So two commissioned nodes can silently map to the same room/board. Note: `project-context.md` ("Python (`generate_nodes.py`)") incorrectly claims `(room, board)` is validated as globally unique — either add the validation to `generate_nodes.py` or correct the doc. Pre-existing; surfaced by the interactive-CLI review, not caused by it.
