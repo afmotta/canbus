@@ -2,7 +2,7 @@
 # base_node.yaml — shared package included by every node
 # =============================================================================
 # Required substitutions:
-#   ${node_name}, ${node_id}
+#   ${node_id}  (the node's only identity — name/friendly_name are derived from it)
 #
 # Flat node_id model (ADR-0007): the node's only identity is its node_id, carried in the
 # 29-bit Extended CAN ID. room/board/behaviour live in a central node_id->{...} map on the
@@ -13,14 +13,14 @@
 
 esphome:
   includes:
-    - ../common/canbus_protocol.h
+    - ../protocol/canbus_protocol.h
   name: node_${node_id}
   friendly_name: "Node ${node_id}"
   on_boot:
     priority: 200
     then:
       - lambda: |-
-          ESP_LOGI("canbus", "Node ${node_name} online — node_id=${node_id}");
+          ESP_LOGI("canbus", "Node ${node_id} online");
           ESP_LOGI("canbus", "  Input  CAN ID: 0x%08X", can_id(CAT_INPUT,  ${node_id}));
           ESP_LOGI("canbus", "  Status CAN ID: 0x%08X", can_id(CAT_STATUS, ${node_id}));
 
@@ -31,14 +31,14 @@ logger:
   level: DEBUG
 
 packages:
-  btn0: !include { file: ../common/button.yaml, vars: { button_index: "0", button_gpio: "24" } }
-  btn1: !include { file: ../common/button.yaml, vars: { button_index: "1", button_gpio: "23" } }
-  btn2: !include { file: ../common/button.yaml, vars: { button_index: "2", button_gpio: "22" } }
-  btn3: !include { file: ../common/button.yaml, vars: { button_index: "3", button_gpio: "21" } }
-  btn4: !include { file: ../common/button.yaml, vars: { button_index: "4", button_gpio: "25" } }
-  btn5: !include { file: ../common/button.yaml, vars: { button_index: "5", button_gpio: "20" } }
-  btn6: !include { file: ../common/button.yaml, vars: { button_index: "6", button_gpio: "19" } }
-  btn7: !include { file: ../common/button.yaml, vars: { button_index: "7", button_gpio: "10" } }
+  btn0: !include { file: button.yaml, vars: { button_index: "0", button_gpio: "24" } }
+  btn1: !include { file: button.yaml, vars: { button_index: "1", button_gpio: "23" } }
+  btn2: !include { file: button.yaml, vars: { button_index: "2", button_gpio: "22" } }
+  btn3: !include { file: button.yaml, vars: { button_index: "3", button_gpio: "21" } }
+  btn4: !include { file: button.yaml, vars: { button_index: "4", button_gpio: "25" } }
+  btn5: !include { file: button.yaml, vars: { button_index: "5", button_gpio: "20" } }
+  btn6: !include { file: button.yaml, vars: { button_index: "6", button_gpio: "19" } }
+  btn7: !include { file: button.yaml, vars: { button_index: "7", button_gpio: "10" } }
 
 globals:
   - id: error_flags

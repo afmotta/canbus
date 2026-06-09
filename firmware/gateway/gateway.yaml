@@ -14,8 +14,8 @@ esphome:
   name: canbus-gateway
   friendly_name: "CAN Bus Gateway"
   includes:
-    - common/canbus_protocol.h
-    - common/node_map.h   # GENERATED central node_id -> room/board/name map (ADR-0007)
+    - ../protocol/canbus_protocol.h
+    - ../protocol/node_map.h   # GENERATED central node_id -> room/board/name map (ADR-0007)
 
 esp32:
   variant: esp32s3

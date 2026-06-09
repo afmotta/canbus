@@ -1,64 +1,59 @@
 #!/usr/bin/env python3
 """
-generate_nodes.py — Generate ESPHome node configs from a registry CSV.
+generate_nodes.py — Generate ESPHome node configs from the registry CSV.
 
 Usage:
-    1. Fill in nodes.csv with your physical layout
-    2. Run: python generate_nodes.py
+    1. Fill in registry/nodes.csv with your physical layout
+    2. Run: python tools/generate_nodes.py
     3. Generated configs appear in nodes/
 
 CSV format:
-    node_id,floor,room,board,location,gpio_list
-    100,0,7,0,"Ground floor hallway","20,21"
+    node_id,floor,room,board,location
+    100,0,7,0,"Ground floor hallway"
 
 Flat node_id model (ADR-0007): node_id is the node's only identity, carried in the 29-bit
 Extended CAN ID. It is the ONLY thing flashed into the node. floor/room/board/location are
 map-seed metadata for the central node_id -> {...} map on the controller/HA — they are NOT
 flashed into the node config (kept here as the registry / map seed).
+
+Every node carries the standard 8-button set (btn0–btn7), SPI/CAN pins, and heartbeat from
+packages/base_node.yaml, so each generated file is minimal: just its node_id + debounce_ms
+and a single include.
 """
 
 import csv
 import sys
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parent.parent  # firmware/
+
 TEMPLATE = """\
 # =============================================================================
 # Node: {name} — node_id {node_id}
 # =============================================================================
-# (map-seed metadata, not flashed) Floor: {floor_label}  Location: {location}  Room {room} Board {board}
-# Buttons:  {num_buttons} (GPIO {gpio_summary})
+# GENERATED from registry/nodes.csv by tools/generate_nodes.py. DO NOT EDIT.
+# Identity-only: the node knows just its node_id. Floor/room/board/location are NOT known at
+# flash time (the node is flashed at allocation, positioned/commissioned later) — they live in
+# the registry and the gateway's node_map.h, never here (ADR-0007).
+# Buttons:  standard 8-button set (btn0–btn7) from packages/base_node.yaml
 # CAN IDs (29-bit Extended, computed at runtime from node_id):
 #   Input  = 0x{input_id:08X}  (CAT_INPUT,  node -> controller, button events)
 #   Status = 0x{status_id:08X}  (CAT_STATUS, node -> controller, heartbeat)
 # =============================================================================
 
 substitutions:
-  node_name: "{name}"
   node_id: "{node_id}"
   debounce_ms: "50"
 
-esphome:
-  name: ${{node_name}}
-  friendly_name: "{location}"
-
-rp2040:
-  board: rpipico
-
-logger:
-  level: DEBUG
-
 packages:
-  base: !include ../common/base_node.yaml
-{button_packages}\
+  base: !include ../packages/base_node.yaml
 """
-
-BUTTON_PKG = '  btn{idx}: !include {{ file: ../common/button.yaml, vars: {{ button_index: "{idx}", button_gpio: "{gpio}" }} }}'
 
 FLOOR_LABELS = {0: "Ground", 1: "First", 2: "Second", 3: "Third"}
 EXAMPLE_ROWS = [
-    ["node_id", "floor", "room", "board", "location", "gpio_list"],
-    [100, 0, 7, 0, "Ground floor hallway", "20,21"],
-    [101, 0, 8, 0, "Ground floor living room", "20,21"],
+    ["node_id", "floor", "room", "board", "location"],
+    [100, 0, 7, 0, "Ground floor hallway"],
+    [101, 0, 8, 0, "Ground floor living room"],
 ]
 
 # CAN ID layout — must match canbus_protocol.h: [category:4][node_id:13][reserved:12].
@@ -110,8 +105,8 @@ def write_node_map(entries, path: Path) -> None:
 
 
 def main():
-    csv_path = Path(__file__).parent / "nodes.csv"
-    out_dir = Path(__file__).parent / "nodes"
+    csv_path = ROOT / "registry" / "nodes.csv"
+    out_dir = ROOT / "nodes"
     out_dir.mkdir(exist_ok=True)
 
     if not csv_path.exists():
@@ -137,19 +132,12 @@ def main():
                 floor = int(row["floor"])
                 room = int(row["room"])
                 board = int(row["board"])
-                gpios = [int(g.strip()) for g in row["gpio_list"].split(",")]
             except ValueError as exc:
                 print(f"ERROR: Invalid integer value on CSV row {reader.line_num}: {exc}", file=sys.stderr)
                 sys.exit(1)
 
             if not (0 <= node_id <= NODE_ID_MAX):
                 print(f"ERROR: node_id {node_id} out of range (valid: 0-{NODE_ID_MAX})", file=sys.stderr)
-                sys.exit(1)
-            if len(gpios) > 6:
-                print(f"ERROR: Too many GPIOs for node {node_id}: max 6, got {len(gpios)}", file=sys.stderr)
-                sys.exit(1)
-            if len(set(gpios)) != len(gpios):
-                print(f"ERROR: Duplicate GPIO in node {node_id}: {row['gpio_list']}", file=sys.stderr)
                 sys.exit(1)
 
             # node_id uniqueness is the one load-bearing invariant (it is the bus address).
@@ -162,32 +150,23 @@ def main():
             input_id = can_id(CAT_INPUT, node_id)
             status_id = can_id(CAT_STATUS, node_id)
 
-            button_lines = [BUTTON_PKG.format(idx=idx, gpio=gpio) for idx, gpio in enumerate(gpios)]
-
             yaml_content = TEMPLATE.format(
                 name=name,
                 node_id=node_id,
-                floor_label=FLOOR_LABELS.get(floor, f"Floor {floor}"),
-                room=room,
-                board=board,
-                location=location,
-                num_buttons=len(gpios),
-                gpio_summary=",".join(str(g) for g in gpios),
                 input_id=input_id,
                 status_id=status_id,
-                button_packages="\n".join(button_lines) + "\n",
             )
 
             out_path = out_dir / f"{name}.yaml"
             with open(out_path, "w") as yf:
                 yf.write(yaml_content)
 
-            floor_groups.setdefault(floor, []).append((node_id, room, board, location, len(gpios)))
+            floor_groups.setdefault(floor, []).append((node_id, room, board, location))
             map_entries.append((node_id, room, board, location))
-            print(f"  ✓ {name}.yaml  Input=0x{input_id:08X}  node_id={node_id}  {len(gpios)} btn  [{location}]")
+            print(f"  ✓ {name}.yaml  Input=0x{input_id:08X}  node_id={node_id}  [{location}]")
             count += 1
 
-    map_path = Path(__file__).parent / "common" / "node_map.h"
+    map_path = ROOT / "protocol" / "node_map.h"
     write_node_map(map_entries, map_path)
     print(f"  ✓ {map_path.name}  (central node_id -> room/board/name map, compiled into the gateway)")
 
@@ -196,8 +175,8 @@ def main():
     for floor in sorted(floor_groups):
         label = FLOOR_LABELS.get(floor, f"Floor {floor}")
         print(f"\n  {label} floor:")
-        for nid, rm, bd, loc, nb in sorted(floor_groups[floor]):
-            print(f"    node_id={nid:<5d}  0x{can_id(CAT_INPUT, nid):08X}  (map-seed R{rm}B{bd})  {nb} btn  {loc}")
+        for nid, rm, bd, loc in sorted(floor_groups[floor]):
+            print(f"    node_id={nid:<5d}  0x{can_id(CAT_INPUT, nid):08X}  (map-seed R{rm}B{bd})  {loc}")
 
 
 if __name__ == "__main__":

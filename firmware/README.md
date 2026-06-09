@@ -52,7 +52,7 @@ connected to MCP2515 OSC1/OSC2) has `value="16MHz"`.
 ## Complete MCP2515 SPI Pin Reference (CANBed RP2040 V1.1)
 
 All values confirmed from V1.1 Eagle schematic. Use these in Story 2.1
-(`firmware/common/base_node.yaml`) and Story 1.4 (`firmware/generate_nodes.py` template).
+(`firmware/packages/base_node.yaml`) and Story 1.4 (`firmware/tools/generate_nodes.py` template).
 
 | Signal      | RP2040 GPIO | Net name | Template assumption | Correct?  |
 | ----------- | ----------- | -------- | ------------------- | --------- |
@@ -84,10 +84,12 @@ All values confirmed from V1.1 Eagle schematic. Use these in Story 2.1
 
 ## Onboarding: `secrets.yaml`
 
-The gateway reads three secrets at config load. There is no pre-flight validation — if
-`secrets.yaml` is missing or any key is absent, `esphome compile`/`run` **fails at config load**
-with a missing-secret error (ESPHome default behavior). Create `firmware/secrets.yaml` before the
-first build:
+The gateway reads three secrets at config load. ESPHome resolves `!secret` from a
+`secrets.yaml` next to the config file, so it lives in `firmware/gateway/` (the gateway is the
+only secrets user). There is no pre-flight validation — if `secrets.yaml` is missing or any key
+is absent, `esphome compile`/`run` **fails at config load** with a missing-secret error (ESPHome
+default behavior). Copy `gateway/secrets.yaml.example` to `firmware/gateway/secrets.yaml` before
+the first build:
 
 | Key                  | Value                                            |
 | -------------------- | ------------------------------------------------ |

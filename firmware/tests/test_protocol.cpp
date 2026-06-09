@@ -1,10 +1,10 @@
 // Standalone native round-trip test for canbus_protocol.h (no ESPHome required).
-// Build & run:  g++ -std=c++17 -Wall -Wextra firmware/test_protocol.cpp -o /tmp/proto && /tmp/proto
+// Build & run:  g++ -std=c++17 -Wall -Wextra firmware/tests/test_protocol.cpp -o /tmp/proto && /tmp/proto
 //
 // Validates the ADR-0007 Extended-ID layout [category:4][node_id:13][reserved:12] and the
 // node TX payloads (button + heartbeat). Pure logic; CI/desktop runnable.
 
-#include "common/canbus_protocol.h"
+#include "../protocol/canbus_protocol.h"
 #include <cassert>
 #include <cstdio>
 

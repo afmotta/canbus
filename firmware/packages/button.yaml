@@ -3,7 +3,7 @@
 # =============================================================================
 # Required vars: ${button_index}, ${button_gpio}
 # Required parent substitutions:
-#   ${node_name}, ${node_id}, ${debounce_ms}
+#   ${node_id}, ${debounce_ms}
 # =============================================================================
 
 script:
@@ -12,17 +12,17 @@ script:
       event_type: uint8_t
     then:
       - lambda: |-
-          ESP_LOGD("btn", "${node_name} btn${button_index}: %s", event_type_str(event_type).c_str());
+          ESP_LOGD("btn", "node ${node_id} btn${button_index}: %s", event_type_str(event_type).c_str());
           auto err = id(can0).send_data(can_id(CAT_INPUT, ${node_id}), true,
               button_payload(${button_index}, event_type));
           if (err != canbus::ERROR_OK) {
-            ESP_LOGW("btn", "${node_name} btn${button_index} TX failed (err=%d), event %s dropped",
+            ESP_LOGW("btn", "node ${node_id} btn${button_index} TX failed (err=%d), event %s dropped",
                 (int) err, event_type_str(event_type).c_str());
           }
 
 binary_sensor:
   - platform: gpio
-    name: "${node_name} Button ${button_index}"
+    name: "Node ${node_id} Button ${button_index}"
     id: btn_${button_index}
     pin:
       number: ${button_gpio}

@@ -84,24 +84,37 @@ ESPHome's `on_frame` CAN trigger provides the data bytes (`x`) but does not clea
 ## Project file structure
 
 ```
-esphome_canbus/
-├── common/
+firmware/
+├── protocol/
 │   ├── canbus_protocol.h    # C++ header: all constants, CAN ID helpers, payload builders/decoders
+│   └── node_map.h           # GENERATED central node_id -> {room, board, name} map (gateway include)
+├── packages/
 │   ├── base_node.yaml       # Shared node package: SPI, MCP2515, heartbeat, AND the standard 8-button set
 │   └── button.yaml          # Per-button package: GPIO + on_multi_click with 5 event types
-├── gateway.yaml             # Gateway config for Waveshare ESP32-S3-POE-ETH-8DI-8DO
-├── generate_nodes.py        # Python script: reads nodes.csv, generates per-node YAML configs
-├── nodes.csv                # Node registry: node_id, floor, room, board, location, gpio_list
+├── gateway/
+│   ├── gateway.yaml         # Gateway config for Waveshare ESP32-S3-RS485-CAN
+│   ├── secrets.yaml.example # wifi + api_encryption_key template (gateway is the only secrets user)
+│   └── secrets.yaml         # local, gitignored
+├── registry/
+│   ├── nodes.csv            # Node registry: node_id, floor, room, board, location
+│   └── node_id_hwm          # persistent monotonic node_id high-water mark
+├── tools/
+│   ├── allocate_node.py     # allocate the next node_id and register it
+│   ├── generate_nodes.py    # reads registry/nodes.csv -> per-node YAML + protocol/node_map.h
+│   └── commission.py        # assign room/board to a node_id, regenerate node_map.h
+├── tests/
+│   └── test_protocol.cpp    # standalone native round-trip test for canbus_protocol.h
 └── nodes/                   # Generated node YAML files (one per board)
     ├── node100.yaml
     ├── node101.yaml
     └── ...
 ```
 
-Each generated node file is minimal: it declares only `node_name`, `node_id`, and
-`debounce_ms` substitutions, the `esphome:`/`rp2040:`/`logger:` blocks, and `packages: base:
-!include ../common/base_node.yaml`. Everything else — SPI/CAN pins and the 8-button set —
-lives in `base_node.yaml`, so all nodes are identical apart from their `node_name`/`node_id`.
+Each generated node file is minimal: it declares only the `node_id` and `debounce_ms`
+substitutions and `packages: base: !include ../packages/base_node.yaml`. Everything else —
+the `esphome:`/`rp2040:`/`logger:` blocks, SPI/CAN pins, and the 8-button set — lives in
+`base_node.yaml`, which derives the device name and friendly name from `node_id`. So all
+nodes are identical apart from their `node_id` (the node's only identity).
 
 ### Why the C++ header exists
 
@@ -110,20 +123,20 @@ ESPHome `!lambda` blocks are inline C++. Without the header, every lambda would 
 ### Per-button package pattern
 
 Every node carries the same standard set of **8 buttons** (`btn0`–`btn7`). These are
-declared once in `common/base_node.yaml`, so individual node files do not configure
+declared once in `packages/base_node.yaml`, so individual node files do not configure
 buttons at all — they just `!include` the base package:
 
 ```yaml
-# common/base_node.yaml
+# packages/base_node.yaml
 packages:
-  btn0: !include { file: ../common/button.yaml, vars: { button_index: "0", button_gpio: "24" } }
-  btn1: !include { file: ../common/button.yaml, vars: { button_index: "1", button_gpio: "23" } }
-  btn2: !include { file: ../common/button.yaml, vars: { button_index: "2", button_gpio: "22" } }
-  btn3: !include { file: ../common/button.yaml, vars: { button_index: "3", button_gpio: "21" } }
-  btn4: !include { file: ../common/button.yaml, vars: { button_index: "4", button_gpio: "25" } }
-  btn5: !include { file: ../common/button.yaml, vars: { button_index: "5", button_gpio: "20" } }
-  btn6: !include { file: ../common/button.yaml, vars: { button_index: "6", button_gpio: "19" } }
-  btn7: !include { file: ../common/button.yaml, vars: { button_index: "7", button_gpio: "10" } }
+  btn0: !include { file: button.yaml, vars: { button_index: "0", button_gpio: "24" } }
+  btn1: !include { file: button.yaml, vars: { button_index: "1", button_gpio: "23" } }
+  btn2: !include { file: button.yaml, vars: { button_index: "2", button_gpio: "22" } }
+  btn3: !include { file: button.yaml, vars: { button_index: "3", button_gpio: "21" } }
+  btn4: !include { file: button.yaml, vars: { button_index: "4", button_gpio: "25" } }
+  btn5: !include { file: button.yaml, vars: { button_index: "5", button_gpio: "20" } }
+  btn6: !include { file: button.yaml, vars: { button_index: "6", button_gpio: "19" } }
+  btn7: !include { file: button.yaml, vars: { button_index: "7", button_gpio: "10" } }
 ```
 
 The `button.yaml` template creates a `binary_sensor` with `on_multi_click` handling all 5 event types. Click detection runs locally on the node (not on the gateway) because multi-click timing requires consistent millisecond-level precision that would be affected by CAN bus latency. The timing thresholds are compile-time constants in ESPHome's `on_multi_click` and cannot be changed at runtime.
@@ -132,7 +145,7 @@ Multi-click patterns are ordered longest-first (triple → double → single →
 
 ### CANBed RP2040 SPI pin mapping
 
-The MCP2515 CAN controller on the CANBed RP2040 is connected via SPI0. These pins are fixed by the board design and are hardcoded directly in `common/base_node.yaml` (no longer passed as per-node substitutions):
+The MCP2515 CAN controller on the CANBed RP2040 is connected via SPI0. These pins are fixed by the board design and are hardcoded directly in `packages/base_node.yaml` (no longer passed as per-node substitutions):
 
 | Function | GPIO | Source |
 |----------|------|--------|
@@ -149,32 +162,24 @@ Note: the board ships as a kit with unsoldered through-hole components (terminal
 
 ### Node config generation
 
-`generate_nodes.py` reads `nodes.csv` and produces one minimal YAML file per board. Because
-all hardware config (SPI/CAN pins and the standard 8-button set) now lives in
-`common/base_node.yaml`, each generated node file only needs its identity and a single
-`!include`:
+`tools/generate_nodes.py` reads `registry/nodes.csv` and produces one minimal YAML file per
+board. Because all hardware config (SPI/CAN pins and the standard 8-button set) and the
+`esphome:`/`rp2040:`/`logger:` blocks now live in `packages/base_node.yaml`, each generated
+node file only needs its identity and a single `!include`:
 
 ```yaml
 substitutions:
-        node_name: "node100"
-        node_id: "100"
-        debounce_ms: "50"
-
-esphome:
-  name: ${node_name}
-  friendly_name: "Ground floor hallway"
-
-rp2040:
-  board: rpipico
-
-logger:
-  level: DEBUG
+  node_id: "100"
+  debounce_ms: "50"
 
 packages:
-  base: !include ../common/base_node.yaml
+  base: !include ../packages/base_node.yaml
 ```
 
-To add a node, add a row to `nodes.csv` and re-run `generate_nodes.py`. `node_id` is the
+`base_node.yaml` derives the device name (`node_${node_id}`) and friendly name from
+`node_id`, so there is no separate `node_name` substitution.
+
+To add a node, add a row to `registry/nodes.csv` and re-run `tools/generate_nodes.py`. `node_id` is the
 node's only flashed identity (a flat value carried in the 29-bit Extended CAN ID per
 ADR-0007); room/board/location live in a central `node_id → {...}` map on the controller/HA,
 not on the node. Node files in `nodes/` are generated output — do not hand-edit them; put

@@ -1,8 +1,11 @@
 # =============================================================================
 # Node: node101 — node_id 101
 # =============================================================================
-# (map-seed metadata, not flashed) Floor: Ground  Location: Ground floor living room  Room 8 Board 0
-# Buttons:  2 (GPIO 20,21)
+# GENERATED from registry/nodes.csv by tools/generate_nodes.py. DO NOT EDIT.
+# Identity-only: the node knows just its node_id. Floor/room/board/location are NOT known at
+# flash time (the node is flashed at allocation, positioned/commissioned later) — they live in
+# the registry and the gateway's node_map.h, never here (ADR-0007).
+# Buttons:  standard 8-button set (btn0–btn7) from packages/base_node.yaml
 # CAN IDs (29-bit Extended, computed at runtime from node_id):
 #   Input  = 0x02065000  (CAT_INPUT,  node -> controller, button events)
 #   Status = 0x06065000  (CAT_STATUS, node -> controller, heartbeat)
@@ -13,4 +16,4 @@ substitutions:
   debounce_ms: "50"
 
 packages:
-  base: !include ../common/base_node.yaml
+  base: !include ../packages/base_node.yaml

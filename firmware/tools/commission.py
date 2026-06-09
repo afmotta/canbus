@@ -19,8 +19,8 @@ from pathlib import Path
 import generate_nodes  # regenerate node_map.h after an edit
 
 HERE = Path(__file__).parent
-CSV_PATH = HERE / "nodes.csv"
-FIELDS = ["node_id", "floor", "room", "board", "location", "gpio_list"]
+CSV_PATH = HERE.parent / "registry" / "nodes.csv"
+FIELDS = ["node_id", "floor", "room", "board", "location"]
 MAX_RB = 255  # room/board are uint8 in node_map.h
 
 
@@ -78,9 +78,9 @@ def main():
     sub.add_parser("list", help="show the registry / current assignments")
     a = sub.add_parser("assign", help="assign room/board (and optional location/floor) to a node_id")
     a.add_argument("--node-id", type=int, required=True)
+    a.add_argument("--floor", type=int)
     a.add_argument("--room", type=int)
     a.add_argument("--board", type=int)
-    a.add_argument("--floor", type=int)
     a.add_argument("--location")
     args = ap.parse_args()
     {"list": cmd_list, "assign": cmd_assign}[args.cmd](args)
