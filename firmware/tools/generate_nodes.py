@@ -61,6 +61,7 @@ CAT_SHIFT = 25
 NODE_SHIFT = 12
 CAT_INPUT, CAT_STATUS = 1, 3
 NODE_ID_MAX = 8191  # 13 bits
+ROOM_BOARD_MAX = 255  # room/board are uint8 in node_map.h (matches commission.py MAX_RB)
 
 
 def can_id(category: int, node_id: int) -> int:
@@ -118,6 +119,7 @@ def main():
         return
 
     seen_node_ids = {}
+    seen_room_board = {}  # (room, board) -> location, for the commissioned-uniqueness invariant
     count = 0
     floor_groups = {}
     map_entries = []  # (node_id, room, board, location) -> compiled into the gateway's node_map.h
@@ -145,6 +147,21 @@ def main():
                 print(f"ERROR: Duplicate node_id {node_id}: '{location}' vs '{seen_node_ids[node_id]}'", file=sys.stderr)
                 sys.exit(1)
             seen_node_ids[node_id] = location
+
+            if not (0 <= room <= ROOM_BOARD_MAX) or not (0 <= board <= ROOM_BOARD_MAX):
+                print(f"ERROR: room/board out of range for node_id {node_id} "
+                      f"(room={room}, board={board}; valid: 0-{ROOM_BOARD_MAX})", file=sys.stderr)
+                sys.exit(1)
+
+            # (room, board) is the gateway's location address; it must be unique among commissioned
+            # nodes. (0, 0) is the unassigned placeholder (allocate_node.py seeds it) — exempt it so
+            # multiple not-yet-commissioned nodes can coexist.
+            if (room, board) != (0, 0):
+                if (room, board) in seen_room_board:
+                    print(f"ERROR: Duplicate (room, board) ({room}, {board}): "
+                          f"'{location}' vs '{seen_room_board[(room, board)]}'", file=sys.stderr)
+                    sys.exit(1)
+                seen_room_board[(room, board)] = location
 
             name = f"node{node_id:03d}"
             input_id = can_id(CAT_INPUT, node_id)
