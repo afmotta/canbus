@@ -12,15 +12,17 @@
 // A bridge joins two CAN segments: a backbone (controller) side and a zone
 // (secondary) side. Forwarding is forward-all both ways (ADR-0005 open item 3:
 // the controller needs all node traffic, management must reach every segment);
-// the loop-free tree topology and the MCP2515's no-self-reception mean a
-// forwarded frame can never echo back through the same bridge.
+// the loop-free tree topology and the controllers' no-self-reception (TWAI and
+// MCP2515 alike in normal mode) mean a forwarded frame can never echo back
+// through the same bridge.
 //
 // Frames are queued on receive and drained on a fixed tick, at most
 // BRIDGE_DRAIN_MAX per direction per tick. The pacing matters more than the
-// buffering: the MCP2515 has only 3 TX buffers and a 125 kbps frame takes ~1 ms
-// on the wire, so blasting a received burst straight into send_data() would
-// overrun the TX side. The queue absorbs the burst; the drain cap meters it out
-// at a rate the transmitter can sustain.
+// buffering: on the LilyGO T-2CAN the zone side is an MCP2515 with only 3 TX
+// buffers, and a 125 kbps frame takes ~1 ms on the wire, so blasting a
+// received burst straight into send_data() would overrun the TX side. The
+// queue absorbs the burst; the drain cap meters it out at a rate the weaker
+// transmitter can sustain (applied to both directions for symmetry).
 //
 // Pure logic only — no ESPHome includes — so the queue/pacing machinery is
 // natively testable (see tests/test_bridge_forwarding.cpp).
@@ -53,7 +55,7 @@ struct BridgeStats
 inline constexpr std::size_t BRIDGE_QUEUE_MAX = 32;
 // Frames drained per direction per tick. At a 10 ms tick this paces TX to
 // 200 frames/s per direction — under the 3 TX buffers and ~1 ms/frame the
-// MCP2515 can sustain, and far above expected load.
+// MCP2515 (the weaker TX side) can sustain, and far above expected load.
 inline constexpr std::size_t BRIDGE_DRAIN_MAX = 2;
 
 // Queue a received frame for the other segment. Oversize frames (> 8 data

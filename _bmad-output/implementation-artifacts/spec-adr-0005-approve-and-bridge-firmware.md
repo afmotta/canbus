@@ -60,7 +60,7 @@ to the bridge; do not introduce loops or any non-tree forwarding.
 ## Code Map
 
 - `_bmad-output/planning-artifacts/adrs/0005-can-bus-topology-segmented-multi-bus.md` -- target ADR: approval metadata, status text, open-item 2 resolution.
-- `firmware/bridge/bridge.yaml` -- new bridge firmware (ESP32 + 2× MCP2515, forward-all, radios off, watchdogs, heartbeat, stats).
+- `firmware/bridge/bridge.yaml` -- new bridge firmware (LilyGO T-2CAN: ESP32-S3 TWAI backbone side + MCP2515 zone side; forward-all, radios off, watchdogs, heartbeat, stats).
 - `firmware/protocol/bridge_forwarding.h` -- new pure-logic store-and-forward queues, drain pacing, stats, error-flag derivation.
 - `firmware/protocol/canbus_protocol.h` -- additive only: `ERR_BRIDGE_QUEUE_OVERFLOW` heartbeat flag.
 - `firmware/tests/test_bridge_forwarding.cpp` -- new native test for the forwarding logic.
@@ -73,7 +73,7 @@ to the bridge; do not introduce loops or any non-tree forwarding.
 - [x] ADR-0005 -- frontmatter `Proposed` → `Accepted` + `acceptedDate: '2026-06-10'`; status section reads as accepted; open item 2 marked resolved (minimal ESPHome).
 - [x] `firmware/protocol/bridge_forwarding.h` -- bounded FIFO per direction, drop-newest on overflow, paced drain (BRIDGE_DRAIN_MAX per tick), cumulative stats, latched error-flag helper, static stores.
 - [x] `firmware/protocol/canbus_protocol.h` -- add `ERR_BRIDGE_QUEUE_OVERFLOW = 0x04` (additive, pre-LIVE policy).
-- [x] `firmware/bridge/bridge.yaml` -- two mcp2515 buses on shared SPI, match-all extended `on_frame` → enqueue, 10 ms drain tick, 30 s backbone heartbeat, 60 s stats log, esp-idf watchdog/brownout sdkconfig, no network components.
+- [x] `firmware/bridge/bridge.yaml` -- esp32_can (TWAI, backbone) + mcp2515 (zone, with GPIO9 boot reset pulse) per the T-2CAN reference firmware; match-all extended `on_frame` → enqueue, 10 ms drain tick, 30 s backbone heartbeat, 60 s stats log, esp-idf watchdog/brownout sdkconfig, no network components.
 - [x] `firmware/tests/test_bridge_forwarding.cpp` -- FIFO/payload fidelity, oversize/overflow rules, drain cap, error-flag latching; passes with `g++ -std=c++17 -Wall -Wextra`.
 - [x] `firmware/README.md` + `architecture.md` -- document the bridge and close the topology-method gap in the planning set.
 
@@ -85,12 +85,22 @@ to the bridge; do not introduce loops or any non-tree forwarding.
 
 ## Spec Change Log
 
+- 2026-06-10: Hardware re-targeted from "ESP32 + 2× MCP2515" to the LilyGO T-2CAN per
+  Alberto: the board's second CAN port is the ESP32-S3's built-in TWAI controller, not a
+  second MCP2515 (source: LilyGO reference firmware,
+  <https://github.com/Xinyuan-LilyGO/T-2Can/blob/main/esphome/can.yaml>). TWAI takes the
+  backbone side (interrupt-driven RX), MCP2515 the zone side.
+
 ## Design Notes
 
-ESPHome compile validation of `bridge.yaml` could not run in this environment (no esphome
-toolchain); the YAML follows the validated `gateway.yaml`/`base_node.yaml` idioms
-(`on_frame` + lambda, `send_data`, interval ticks, static-store pattern). First
-`esphome compile bridge/bridge.yaml` is the next gate, then the open-item-5 hardware soak.
+`bridge.yaml` was validated with `esphome config` AND fully compiled with
+`esphome compile` (ESPHome 2026.5.3, esp-idf 5.5.4, ESP32-S3 target) — "Successfully
+compiled program", no warnings in project code. Three forwarding assumptions were also
+verified against the installed ESPHome source: `on_frame` with `can_id: 0` +
+`can_id_mask: 0` matches every frame of the configured extended/standard kind
+(`canbus.cpp` trigger loop), `esp32_can` runs `TWAI_MODE_NORMAL` (no self-reception, so
+forward-all cannot echo), and `mcp2515` returns `ERROR_ALLTXBUSY` once its 3 TX buffers
+fill (the drain-pacing rationale). The remaining gate is the open-item-5 hardware soak.
 The bridge takes its `node_id` as a substitution rather than a registry change because
 `generate_nodes.py` emits a button-node YAML per CSV row; teaching the registry about roles
 is deliberately out of scope (Ask First boundary).
@@ -102,6 +112,7 @@ is deliberately out of scope (Ask First boundary).
 - `g++ -std=c++17 -Wall -Wextra firmware/tests/test_bridge_forwarding.cpp -o /tmp/bridge && /tmp/bridge` -- expected: `test_bridge_forwarding: all assertions passed`.
 - `g++ -std=c++17 -Wall -Wextra firmware/tests/test_protocol.cpp -o /tmp/proto && /tmp/proto` -- expected: protocol self-checks still pass with the additive flag.
 - `grep -cE "wifi:|api:|ota:" firmware/bridge/bridge.yaml` -- expected: matches only inside comments (radios-off requirement).
+- `esphome compile firmware/bridge/bridge.yaml` -- expected: builds clean (validated with ESPHome 2026.5.3).
 
 **Manual checks (if no CLI):**
 - Read `bridge.yaml` against ADR-0005's "mandatory reliability requirements" list and confirm a one-to-one mapping.

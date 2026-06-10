@@ -29,9 +29,10 @@ reliability strengths.
 
 At acceptance, open item 2 (bridge firmware platform) was resolved in favor of **minimal
 ESPHome** (one toolchain across the fleet), and a first bridge firmware landed at
-`firmware/bridge/bridge.yaml` with the store-and-forward queue/pacing logic as natively
-tested pure logic in `firmware/protocol/bridge_forwarding.h` (mirroring the `ha_arbitration.h`
-pattern). The bridge heartbeats toward the controller as a normal node (flat `node_id`,
+`firmware/bridge/bridge.yaml`, targeting the **LilyGO T-2CAN** (ESP32-S3; per LilyGO's
+reference firmware its two CAN ports are one built-in TWAI controller plus one MCP2515 —
+not two MCP2515s). The store-and-forward queue/pacing logic is natively tested pure logic
+in `firmware/protocol/bridge_forwarding.h` (mirroring the `ha_arbitration.h` pattern). The bridge heartbeats toward the controller as a normal node (flat `node_id`,
 ADR-0007) and latches a queue-overflow error flag, so a dead or degraded bridge is observable
 at the gateway. Open items 1 (segment count) and 4–6 (per-bridge power, hardware soak
 test of the watchdog/fail-safe behavior, pricing re-verification) remain open — none block

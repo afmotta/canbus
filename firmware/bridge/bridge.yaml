@@ -1,15 +1,22 @@
 # =============================================================================
 # bridge.yaml — CAN segment bridge (store-and-forward, ADR-0005)
 # =============================================================================
-# Hardware: ESP32 + 2x MCP2515 (the ADR-0005 DIY option). The LilyGO T-2CAN
-#           variant is a pin/platform remap of this file once that hardware
-#           decision lands; pins below are provisional until a board is fixed.
+# Hardware: LilyGO T-2CAN (ESP32-S3). The board's two CAN ports are NOT two
+#           MCP2515s: one is the ESP32-S3's built-in TWAI controller, the
+#           other an MCP2515 on SPI with a hardware reset line on GPIO9.
+#           Board/pins/clock taken from LilyGO's reference firmware:
+#           https://github.com/Xinyuan-LilyGO/T-2Can/blob/main/esphome/can.yaml
 # Role:     Joins one zone (secondary) segment to the backbone segment in the
 #           loop-free tree. Forward-all both ways (ADR-0005 open item 3): the
 #           controller must hear every node, and management/commissioning
 #           frames must reach every secondary. Plus its own CAT_STATUS
 #           heartbeat on the backbone side, so a dead/silent bridge is
 #           observable at the controller like any node.
+#
+# Port assignment: the TWAI port is the BACKBONE side — its RX path is
+# interrupt-driven with a deep driver queue, suiting the segment that carries
+# the aggregate traffic of every zone. The MCP2515 (polled from loop(), 2 RX
+# buffers) takes the single-zone side.
 #
 # ADR-0005 mandatory reliability requirements, mapped:
 #   - Single-purpose firmware: this file only forwards + heartbeats. Never mix
@@ -20,18 +27,19 @@
 #   - Watchdog + brownout + fail-safe: esp-idf's interrupt/task watchdogs and
 #     brownout detector, with CONFIG_ESP_TASK_WDT_PANIC so a wedged loop
 #     reboots instead of limping. A hung/rebooting bridge stops forwarding —
-#     it degrades to "silent" (MCP2515 stops TX without firmware service);
-#     it never holds a segment dominant.
+#     it degrades to "silent" (both controllers stop TX without firmware
+#     service); it never holds a segment dominant.
 #   - Conservative forwarding: store-and-forward queues with paced drain
 #     (bridge_forwarding.h) — bursts are buffered and metered out at a rate
-#     the MCP2515's 3 TX buffers sustain at 125 kbps; drops are counted and
-#     latched into the heartbeat error flags (ERR_BRIDGE_QUEUE_OVERFLOW).
+#     even the weaker MCP2515 TX side (3 buffers) sustains at 125 kbps; drops
+#     are counted and latched into the heartbeat error flags
+#     (ERR_BRIDGE_QUEUE_OVERFLOW).
 #
 # Known validation gaps (ADR-0005 open item 5 — soak test before install):
-#   - ESPHome polls the MCP2515 from loop() (~16 ms); with 2 RX buffers a
-#     sustained >2-frames-per-poll burst can drop frames at RX before the
-#     queue ever sees them. Fine at home-scale event rates; verify under the
-#     bench burst test.
+#   - The zone side (MCP2515) is polled from loop() (~16 ms); with 2 RX
+#     buffers a sustained >2-frames-per-poll burst can drop frames at RX
+#     before the queue ever sees them. Fine at home-scale event rates;
+#     verify under the bench burst test.
 #   - Watchdog/brownout recovery and never-babble behavior must be observed
 #     on hardware (kill/hang the firmware mid-traffic, scope the bus).
 # =============================================================================
@@ -50,15 +58,24 @@ esphome:
   includes:
     - ../protocol/canbus_protocol.h
     - ../protocol/bridge_forwarding.h
+  # MCP2515 hardware reset pulse before its component initializes (the
+  # mcp2515 below carries setup_priority -100 so it sets up after this runs).
+  # Sequence and timing from LilyGO's reference firmware.
   on_boot:
-    priority: 200
+    priority: 800.0
     then:
+      - output.turn_on: mcp_rst_pin
+      - delay: 100ms
+      - output.turn_off: mcp_rst_pin
+      - delay: 100ms
+      - output.turn_on: mcp_rst_pin
+      - delay: 100ms
       - lambda: |-
           ESP_LOGI("bridge", "Bridge ${node_id} online (backbone <-> zone, forward-all)");
           ESP_LOGI("bridge", "  Status CAN ID: 0x%08X", can_id(CAT_STATUS, ${node_id}));
 
 esp32:
-  board: esp32dev
+  board: esp32-s3-devkitm-1
   framework:
     type: esp-idf
     # Defaults already enable the interrupt watchdog, task watchdog, and
@@ -76,6 +93,12 @@ logger:
 
 # NO wifi:, api:, ota:, bluetooth: — ADR-0005 "radios off" is load-bearing.
 
+# --------------- MCP2515 reset line (T-2CAN: GPIO9) ---------------
+output:
+  - platform: gpio
+    pin: GPIO9
+    id: mcp_rst_pin
+
 # --------------- Forwarding state ---------------
 # Queues/counters live in bridge_forwarding.h static stores (custom struct
 # types cannot be ESPHome globals — see header). Globals below are only the
@@ -88,30 +111,29 @@ globals:
     type: uint32_t
     initial_value: "0"
 
-# --------------- SPI bus shared by both MCP2515s ---------------
+# --------------- SPI bus for the MCP2515 (T-2CAN pinout) ---------------
 spi:
-  clk_pin: GPIO18
-  mosi_pin: GPIO23
-  miso_pin: GPIO19
+  clk_pin: GPIO12
+  mosi_pin: GPIO11
+  miso_pin: GPIO13
 
 # --------------- The two CAN segments ---------------
 # The protocol is Extended-ID-only (ADR-0007); standard-ID frames are
 # out-of-spec on this bus and are not forwarded. can_id/can_id_mask 0 in
-# on_frame means "match every extended frame". A frame this bridge transmits
-# is not received by its own MCP2515 (no self-reception), so forward-all
-# cannot echo; the tree topology (ADR-0005: strictly no loops) guarantees no
-# multi-bridge cycle either.
+# on_frame means "match every extended frame". Neither controller receives
+# its own transmissions in normal mode (TWAI and MCP2515 alike), so
+# forward-all cannot echo; the tree topology (ADR-0005: strictly no loops)
+# guarantees no multi-bridge cycle either.
 canbus:
-  - platform: mcp2515
+  # Backbone side — ESP32-S3 built-in TWAI (T-2CAN: TX=GPIO7, RX=GPIO6).
+  - platform: esp32_can
     id: can_backbone
     use_extended_id: true
     # Component default TX id (CAT_STATUS base). Every send specifies an
     # explicit can_id + use_extended_id, so this is never relied on.
     can_id: 0x06000000
-    cs_pin: GPIO5
-    # Generic MCP2515 breakout modules carry an 8 MHz crystal (CANBed boards
-    # are 16 MHz) — set to match the actual module or bit timing is wrong.
-    clock: 8MHZ
+    tx_pin: GPIO7
+    rx_pin: GPIO6
     bit_rate: 125KBPS
     on_frame:
       - can_id: 0
@@ -124,12 +146,16 @@ canbus:
                 ESP_LOGW("bridge", "to-zone queue full; dropped frame 0x%08X", can_id);
               }
 
+  # Zone side — MCP2515 (T-2CAN: CS=GPIO10, 16 MHz crystal). setup_priority
+  # -100 keeps its init after the on_boot reset pulse (LilyGO reference).
   - platform: mcp2515
+    setup_priority: -100.0
     id: can_zone
     use_extended_id: true
     can_id: 0x06000000
-    cs_pin: GPIO4
-    clock: 8MHZ
+    cs_pin: GPIO10
+    clock: 16MHZ
+    mode: NORMAL
     bit_rate: 125KBPS
     on_frame:
       - can_id: 0
