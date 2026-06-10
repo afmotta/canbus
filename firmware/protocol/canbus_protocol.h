@@ -98,6 +98,8 @@ inline constexpr uint8_t EVT_EXTRA_LONG = EVT_EXTRA_LONG_PRESS;
 inline constexpr uint8_t ERR_NONE = 0x00;
 inline constexpr uint8_t ERR_CAN_TX_FAIL = 0x01;
 inline constexpr uint8_t ERR_CAN_BUS_OFF = 0x02;
+// Segment bridge only (ADR-0005): the store-and-forward queue dropped frames.
+inline constexpr uint8_t ERR_BRIDGE_QUEUE_OVERFLOW = 0x04;
 
 // --------------- Sensor measurement types (CAT_SENSOR, ADR-0006) ---------------
 // A uint16 in the payload that *implies* the value's encoding (see sensor_payload below).

@@ -72,7 +72,7 @@ _This document builds collaboratively through step-by-step discovery. Sections a
 5. **Platform framework split** — nodes use `rp2040` platform; gateway must use `esp-idf`. Framework confusion is a silent, hard-to-debug failure mode.
 6. **Hardware verification gates** — three open questions (OQ-1, OQ-2, OQ-3) must be resolved from physical documentation before any firmware can compile correctly.
 7. **Observability gap in the untested chain** — the on_frame→global→homeassistant.event path has no exception surface. Logging must be explicit within the chain; silent failures are undetectable otherwise.
-8. **CAN bus topology** — bus load under full node deployment, cable length, and ground continuity across floors are not addressed. CAN ID priority still cannot be retrofitted after protocol freeze; under the current flat `[category:4][node_id:13][reserved:12]` layout, ADR-0004 decision D3 accepts the within-category `node_id` priority coupling as a known, benign limitation for this protocol. At minimum a back-of-envelope topology sketch (node count, cable length, arbitration ID allocation) should exist before protocol is finalized.
+8. **CAN bus topology** — resolved in structure by ADR-0005 (accepted 2026-06-10): a segmented multi-bus (backbone + per-zone secondaries, strict loop-free tree, 125 kbps everywhere) coupled by store-and-forward software bridges (`firmware/bridge/bridge.yaml`); a single trunk-and-spur is not viable for this house. The segment count and cable-budget/zone sketch remain ADR-0005 open item 1 and must precede installation. CAN ID priority still cannot be retrofitted after protocol freeze; under the current flat `[category:4][node_id:13][reserved:12]` layout, ADR-0004 decision D3 accepts the within-category `node_id` priority coupling as a known, benign limitation for this protocol.
 9. **Commissioning procedure gap** — no procedure exists for registering, assigning an ID to, and verifying a new node on the bus before wall installation. A commissioning checklist is a required PoC deliverable given the no-OTA constraint.
 10. **Single gateway = single point of failure** — if the gateway is unavailable, all button events are silently dropped. This is an accepted PoC constraint but must be a stated architectural decision, not an implicit one.
 
@@ -687,7 +687,7 @@ listed for code review. Enforcement guidelines are specific and actionable.
 - ESPHome version management: once pinned, a process for evaluating upgrades (specifically re-validating the direct API call approach) should be established.
 - Production gateway board validation is the next major architecture gate after PoC.
 - Node health monitoring (heartbeat → HA event → aliveness dashboard) is the natural next feature after PoC sign-off.
-- CAN bus topology sketch (cable lengths, ground continuity across floors) should precede production installation.
+- CAN bus topology sketch (cable lengths, ground continuity across floors) should precede production installation — the topology *method* is now decided (ADR-0005: segmented multi-bus with software bridges); the sketch sets the segment/bridge count (ADR-0005 open item 1).
 
 ### Implementation Handoff
 
