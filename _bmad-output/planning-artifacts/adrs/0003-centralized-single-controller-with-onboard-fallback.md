@@ -1,15 +1,17 @@
 ---
 adr: 0003
 title: 'Centralized single-controller with on-board fallback logic (HA-offline graceful degradation)'
-status: 'Proposed'
+status: 'Accepted'
 date: '2026-06-04'
+acceptedDate: '2026-06-10'
 deciders: ['Alberto']
 author: 'Winston (System Architect)'
 dependsOn:
-  - 'ADR-0001: Adopt CAN Extended IDs with location-as-address'
+  - 'ADR-0007: Flat node_id identity with central meaning map (supersedes the original ADR-0001 dependency)'
 relatedDocuments:
   - _bmad-output/planning-artifacts/adrs/0001-can-extended-id-location-as-address.md
   - _bmad-output/planning-artifacts/adrs/0002-runtime-assignable-node-addressing-and-commissioning.md
+  - _bmad-output/planning-artifacts/adrs/0007-flat-node-id-with-central-meaning-map.md
   - _bmad-output/planning-artifacts/architecture.md
 ---
 
@@ -17,11 +19,24 @@ relatedDocuments:
 
 ## Status
 
-**Proposed** — Alberto selected this option (Option 1) on 2026-06-04 after evaluating it
-against two distributed alternatives (below); pending formal acceptance and resolution of
-the open items. This is the **post-POC target architecture**: the POC's single-gateway
-setup was a deliberate simplification that has been compiled/code-reviewed, with bench and
-HA acceptance validation still pending in Epic 4; this ADR records what comes after it.
+**Accepted (2026-06-10).** Alberto selected this option (Option 1) on 2026-06-04 after
+evaluating it against two distributed alternatives (below). This is the **post-POC target
+architecture**: the POC's single-gateway setup was a deliberate simplification (since
+validated and signed off in Epic 4); this ADR records what comes after it.
+
+Two things changed between proposal and acceptance:
+
+- **ADR-0007** (accepted 2026-06-09) superseded ADR-0001/0002 and re-keyed node identity to
+  a flat `node_id`. Binding source events are therefore keyed on `(node_id, button, event)`
+  — the controller resolves `node_id → room` via the central map (ADR-0007 §6). This ADR's
+  control architecture is otherwise unaffected (ADR-0007 "Impact on other ADRs").
+- **Open item 4 (PoC command-surface cleanup) is already resolved**: the generic
+  `SUBTYPE_OUTPUT_CMD` / `canbus_send_output` hooks were removed in the ADR-0007 protocol
+  rewrite (PRs #12–#19); `CAT_OUTPUT` is management/commissioning-only.
+
+The `ha_ready` arbitration machinery (readiness heartbeat + TTL, manifest-hash check,
+per-event ACK/fallback timeout) is prototyped on the current PoC gateway — log-only
+fallback, placeholder manifest hash — to resolve open item 2 (timeout values) empirically.
 
 The physical/electrical **topology** (where relays and circuits live) is explicitly
 **out of scope** here and parked for a future ADR at Alberto's request.
@@ -77,7 +92,8 @@ with the button→action logic held **on the board itself** so it survives HA ou
 
 The canonical binding manifest is the source of truth. Each binding records:
 
-- source event: `(room, board, button, event)`
+- source event: `(node_id, button, event)` — flat `node_id` per ADR-0007; the controller
+  resolves `node_id → room` via the central map
 - `mode`: one of `ha_with_local_fallback`, `local_authoritative`, `ha_only`
 - target: Modbus relay/switch, HA entity, scene, or automation reference
 - local fallback action, when applicable: e.g. `toggle`, `on`, `off`, `pulse`
@@ -169,11 +185,14 @@ belongs on Modbus/RS485 from the controller.
   outputs for controller ESPHome YAML and HA automations.
 2. **Timeout values** — set HA readiness heartbeat TTL and per-event ACK fallback timeout on
   target hardware so degraded switching remains acceptably fast without causing double
-  actions.
+  actions. *In progress:* the machinery is prototyped on the PoC gateway with tunable
+  substitutions (`ha_heartbeat_ttl_ms`, `ack_timeout_ms`) so values can be tuned empirically.
 3. **Runtime binding push (Phase 2)** — design staging/commit/rollback over the controller's
   Native API/Ethernet. Confirmed not over CAN.
-4. **PoC command-surface cleanup** — remove/rename/constrain generic `SUBTYPE_OUTPUT_CMD`
-  and `canbus_send_output` before target implementation so `CAT_OUTPUT` is management-only.
+4. **PoC command-surface cleanup** — ~~remove/rename/constrain generic `SUBTYPE_OUTPUT_CMD`
+  and `canbus_send_output` before target implementation so `CAT_OUTPUT` is management-only.~~
+  **Resolved** by the ADR-0007 protocol rewrite (PRs #12–#19): the hooks are gone and
+  `CAT_OUTPUT` is management/commissioning-only.
 5. **Active/standby redundancy** — design the pair + Modbus-master hand-over. Future.
 6. **Modbus scale/latency validation** on target hardware.
 7. **Controller board selection** — a board with CAN + Ethernet + Modbus (RS485).

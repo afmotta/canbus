@@ -1,0 +1,3 @@
+# ESPHome build artifacts and local secrets (real credentials live here)
+/.esphome/
+/secrets.yaml

@@ -98,3 +98,26 @@ the first build:
 | `api_encryption_key` | base64 key from `openssl rand -base64 32`        |
 
 Nodes have no WiFi/API and require no secrets.
+
+---
+
+## ha_ready Arbitration Prototype (ADR-0003)
+
+The gateway carries a prototype of ADR-0003's HA-readiness arbitration: HA proves liveness
+(and that it runs the same binding manifest) by calling the `ha_readiness_heartbeat` API
+service every 5 s; each button event forwarded to HA carries an `event_id` that HA must ACK
+via `ha_ack_event` before the fallback timeout. When HA is not ready — API disconnected,
+heartbeat stale, or manifest-hash mismatch — or an ACK is missed, the **fallback only logs**
+(`FALLBACK ...` at WARN): no relays exist yet, and the binding manifest is stubbed by a
+placeholder hash.
+
+- HA-side counterpart: copy `gateway/ha_arbitration_automations.yaml` into Home Assistant.
+- Observability: the gateway exposes a diagnostic **HA Ready** binary sensor, and the logs
+  carry the tuning data: `ACK ... rtt=` (round-trip per event), `FALLBACK ... waited=`
+  (actual fallback latency — `ack_timeout_ms` plus up to 250 ms sweep granularity), and
+  `LATE ACK ... late=+` (an ACK landing after its fallback fired: the double-action window).
+- Tuning (resolves ADR-0003 open item 2 empirically) via `gateway.yaml` substitutions:
+  `ha_heartbeat_ttl_ms` (default 15000) and `ack_timeout_ms` (default 500); `manifest_hash`
+  (default `dev-unbound`) must match the hash HA's heartbeat sends.
+- Pure logic lives in `protocol/ha_arbitration.h`; native test:
+  `g++ -std=c++17 -Wall -Wextra firmware/tests/test_ha_arbitration.cpp -o /tmp/arb && /tmp/arb`

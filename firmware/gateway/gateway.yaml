@@ -8,7 +8,21 @@
 # Flat node_id model (ADR-0007): identity is the node_id in the 29-bit Extended ID; all
 # content is in the payload. OUTPUT command / commissioning services are a later slice
 # (relay control is Modbus/API per ADR-0003), so this gateway is input-only for now.
+#
+# ha_ready arbitration prototype (ADR-0003 open item 2): HA proves readiness by calling
+# ha_readiness_heartbeat with the binding-manifest hash; button events forwarded to HA
+# carry an event_id that HA must ACK via ha_ack_event before ack_timeout_ms. Fallback
+# actions only LOG (no relays yet); the manifest is stubbed by the manifest_hash
+# substitution until the binding-manifest slice lands. HA-side counterpart:
+# ha_arbitration_automations.yaml (copy into Home Assistant).
 # =============================================================================
+
+substitutions:
+  # Placeholder until the binding manifest + generator exist; HA's heartbeat must echo it.
+  manifest_hash: "dev-unbound"
+  # Tunable on hardware to resolve ADR-0003 open item 2 (values are milliseconds).
+  ha_heartbeat_ttl_ms: "15000"
+  ack_timeout_ms: "500"
 
 esphome:
   name: canbus-gateway
@@ -16,6 +30,7 @@ esphome:
   includes:
     - ../protocol/canbus_protocol.h
     - ../protocol/node_map.h   # GENERATED central node_id -> room/board/name map (ADR-0007)
+    - ../protocol/ha_arbitration.h   # ha_ready + pending-ACK pure logic (ADR-0003)
 
 esp32:
   variant: esp32s3
@@ -37,10 +52,115 @@ wifi:
 api:
   encryption:
     key: !secret api_encryption_key
-  # OUTPUT command / commissioning services are added in the commissioning slice.
+  # Commissioning / OUTPUT-command services land in the commissioning slice; the
+  # services below are the ADR-0003 arbitration surface only.
+  services:
+    # HA calls this every few seconds (see ha_arbitration_automations.yaml). The hash the
+    # caller sends must match the local ${manifest_hash}; a mismatch keeps ha_ready off
+    # (ADR-0003: hash mismatch disables HA authority).
+    - service: ha_readiness_heartbeat
+      variables:
+        manifest_hash: string
+      then:
+        - lambda: |-
+            // The substitution is confined to this one literal (never spliced into a
+            // log format string — a future generated hash could contain '%').
+            static const char *LOCAL_HASH = "${manifest_hash}";
+            id(last_ha_hb_ms) = millis();
+            id(ha_hb_seen) = true;
+            const bool ok = (strcmp(manifest_hash.c_str(), LOCAL_HASH) == 0);
+            // Log on the first heartbeat of a session too: ha_hash_ok starts false, so
+            // a boot-time mismatch would otherwise never WARN.
+            if (!id(ha_hash_evaluated) || ok != id(ha_hash_ok)) {
+              if (ok)
+                ESP_LOGI("arb", "Manifest hash match ('%s'); HA authority enabled", LOCAL_HASH);
+              else
+                ESP_LOGW("arb", "Manifest hash mismatch: HA='%s' local='%s'; HA authority disabled",
+                         manifest_hash.c_str(), LOCAL_HASH);
+            }
+            id(ha_hash_evaluated) = true;
+            id(ha_hash_ok) = ok;
+    # HA's generated automation ACKs each forwarded button event by event_id. The rtt /
+    # late logs are the empirical data for tuning ack_timeout_ms (ADR-0003 open item 2):
+    # a LATE ACK means the fallback already fired — that lateness is the double-action window.
+    - service: ha_ack_event
+      variables:
+        event_id: int
+      then:
+        - lambda: |-
+            PendingAck acked{};
+            uint32_t deadline = 0;
+            if (pending_ack(pending_acks_store(), (uint32_t) event_id, &acked)) {
+              ESP_LOGI("arb", "ACK event_id=%u rtt=%ums", (unsigned) event_id,
+                       (unsigned) (millis() - (acked.deadline_ms - ${ack_timeout_ms})));
+            } else if (expired_take(expired_ring_store(), (uint32_t) event_id, &deadline)) {
+              ESP_LOGW("arb", "LATE ACK after fallback: event_id=%u late=+%ums (double-action window)",
+                       (unsigned) event_id, (unsigned) (millis() - deadline));
+            } else {
+              ESP_LOGD("arb", "ACK for unknown event_id=%u (never pending)", (unsigned) event_id);
+            }
+  # Any client disconnect conservatively revokes readiness — we cannot tell which
+  # client was HA, and failing toward fallback is the safe direction. The next
+  # heartbeat (<= 5s away) re-proves readiness for the new session; without this, a
+  # stale hash/heartbeat would keep ha_ready true for up to the TTL across an HA
+  # restart with a changed manifest.
+  on_client_disconnected:
+    then:
+      - lambda: |-
+          id(ha_hb_seen) = false;
+          id(ha_hash_ok) = false;
+          id(ha_hash_evaluated) = false;
 
 ota:
   - platform: esphome
+
+# --------------- ha_ready arbitration state (ADR-0003) ---------------
+globals:
+  - id: last_ha_hb_ms
+    type: uint32_t
+    initial_value: '0'
+  - id: ha_hb_seen   # last_ha_hb_ms == 0 is a valid timestamp, not a sentinel
+    type: bool
+    initial_value: 'false'
+  - id: ha_hash_ok
+    type: bool
+    initial_value: 'false'
+  - id: ha_hash_evaluated   # whether any heartbeat was hash-checked this API session
+    type: bool
+    initial_value: 'false'
+  - id: next_event_id
+    type: uint32_t
+    initial_value: '1'
+  # The pending-ACK list lives in ha_arbitration.h (pending_acks_store()) — ESPHome
+  # globals cannot carry a custom struct type (storage is declared before user includes).
+
+binary_sensor:
+  - platform: template
+    id: ha_ready_sensor
+    name: "HA Ready"
+    entity_category: diagnostic
+    # is_connected() is true for ANY API client (a laptop log session counts) — the
+    # HA-specific liveness term is the heartbeat TTL, not this flag.
+    lambda: |-
+      return ha_ready(api::global_api_server->is_connected(), id(ha_hash_ok), id(ha_hb_seen),
+                      id(last_ha_hb_ms), millis(), ${ha_heartbeat_ttl_ms});
+
+interval:
+  # Sweep pending ACKs; each expired event fires its (log-only) fallback exactly once.
+  # The 250ms granularity means actual fallback latency is ack_timeout_ms + 0-250ms;
+  # "waited" in the log is the measured time since the event was forwarded.
+  - interval: 250ms
+    then:
+      - lambda: |-
+          const uint32_t now = millis();
+          const auto expired = pending_expire(pending_acks_store(), now);
+          for (const auto &e : expired) {
+            expired_record(expired_ring_store(), e.event_id, e.deadline_ms);
+            ESP_LOGW("arb", "FALLBACK (ack timeout): node=%u btn=%u %s event_id=%u waited=%ums",
+                     (unsigned) e.node_id, (unsigned) e.button,
+                     event_type_str(e.event_type).c_str(), (unsigned) e.event_id,
+                     (unsigned) (now - (e.deadline_ms - ${ack_timeout_ms})));
+          }
 
 # --------------- CAN Bus (native ESP32 TWAI) ---------------
 canbus:
@@ -70,21 +190,43 @@ canbus:
                              (unsigned) payload_button_index(x),
                              event_type_str(payload_event_type(x)).c_str());
                 # Only forward recognized event types to HA; unknown types are logged above but not fired.
+                # ADR-0003 arbitration: ha_ready -> forward with event_id + track the ACK;
+                # not ready -> the local fallback path runs immediately (log-only prototype).
                 - if:
                     condition:
                       lambda: 'return event_type_str(payload_event_type(x)) != "unknown";'
                     then:
-                      - homeassistant.event:
-                          event: esphome.canbus_button
-                          data:
-                            # node_id is the identity; room/board/name resolved from the
-                            # compiled central map (node_map.h). Unknown node -> 255/"unknown".
-                            node_id: !lambda 'return to_string(can_id_node(can_id));'
-                            room: !lambda 'return to_string(node_map_room(can_id_node(can_id)));'
-                            board: !lambda 'return to_string(node_map_board(can_id_node(can_id)));'
-                            name: !lambda 'return std::string(node_map_name(can_id_node(can_id)));'
-                            button: !lambda 'return to_string(payload_button_index(x));'
-                            event: !lambda 'return std::string(event_type_str(payload_event_type(x)));'
+                      - if:
+                          condition:
+                            lambda: |-
+                              return ha_ready(api::global_api_server->is_connected(), id(ha_hash_ok),
+                                              id(ha_hb_seen), id(last_ha_hb_ms), millis(),
+                                              ${ha_heartbeat_ttl_ms});
+                          then:
+                            # Pending entry first, so an ACK can never beat the bookkeeping;
+                            # next_event_id increments after the event so the data lambda
+                            # below reads the same id.
+                            - lambda: |-
+                                pending_add(pending_acks_store(), id(next_event_id), millis(), ${ack_timeout_ms},
+                                            can_id_node(can_id), payload_button_index(x), payload_event_type(x));
+                            - homeassistant.event:
+                                event: esphome.canbus_button
+                                data:
+                                  # node_id is the identity; room/board/name resolved from the
+                                  # compiled central map (node_map.h). Unknown node -> 255/"unknown".
+                                  node_id: !lambda 'return to_string(can_id_node(can_id));'
+                                  room: !lambda 'return to_string(node_map_room(can_id_node(can_id)));'
+                                  board: !lambda 'return to_string(node_map_board(can_id_node(can_id)));'
+                                  name: !lambda 'return std::string(node_map_name(can_id_node(can_id)));'
+                                  button: !lambda 'return to_string(payload_button_index(x));'
+                                  event: !lambda 'return std::string(event_type_str(payload_event_type(x)));'
+                                  event_id: !lambda 'return to_string(id(next_event_id));'
+                            - lambda: 'id(next_event_id)++;'
+                          else:
+                            - lambda: |-
+                                ESP_LOGW("arb", "FALLBACK (ha not ready): node=%u btn=%u %s",
+                                         (unsigned) can_id_node(can_id), (unsigned) payload_button_index(x),
+                                         event_type_str(payload_event_type(x)).c_str());
 
       # ---- All heartbeats (CAT_STATUS) ----
       - can_id: 0x06000000        # CAT_STATUS << CAT_SHIFT

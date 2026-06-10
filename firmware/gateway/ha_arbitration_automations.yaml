@@ -1,0 +1,56 @@
+# =============================================================================
+# ha_arbitration_automations.yaml — Home Assistant half of the ADR-0003 prototype
+# =============================================================================
+# This is HOME ASSISTANT configuration, not ESPHome config. Copy these automations
+# into HA (automations.yaml include, or recreate them in the UI). They pair with
+# the gateway's ha_readiness_heartbeat / ha_ack_event API services (gateway.yaml).
+#
+# - The heartbeat proves HA is alive AND running the same binding manifest: the
+#   manifest_hash below must match the gateway's ${manifest_hash} substitution
+#   ("dev-unbound" until the binding-manifest slice lands). Stop this automation
+#   (or change the hash) to watch the gateway's "HA Ready" sensor drop and button
+#   presses log FALLBACK instead of firing events — that is the ADR-0003 degraded
+#   path, exercisable from the couch.
+# - The ACK automation answers every forwarded button event within the gateway's
+#   ack_timeout_ms. In the target architecture it is generated from the binding
+#   manifest and ACKs only after applying the bound action; here it ACKs
+#   unconditionally, which is enough to exercise the timeout machinery.
+#
+# Service names are esphome.<device>_<service> — device "canbus-gateway" becomes
+# canbus_gateway.
+# =============================================================================
+
+- id: canbus_gateway_readiness_heartbeat
+  alias: "CAN gateway: readiness heartbeat"
+  description: >-
+    Tells the CAN gateway every 5s that HA is up and which binding-manifest hash it
+    carries. The gateway's TTL (ha_heartbeat_ttl_ms, default 15s) tolerates two
+    missed beats.
+  mode: single
+  triggers:
+    - trigger: time_pattern
+      seconds: "/5"
+  actions:
+    - action: esphome.canbus_gateway_ha_readiness_heartbeat
+      data:
+        manifest_hash: "dev-unbound"
+
+- id: canbus_gateway_ack_button_events
+  alias: "CAN gateway: ACK forwarded button events"
+  description: >-
+    ACKs each esphome.canbus_button event by its event_id so the gateway cancels the
+    pending local fallback for that event. Parallel mode: queued mode would serialize
+    ACK round-trips (skewing the timeout measurement) and silently drop triggers past
+    its max during bursts.
+  mode: parallel
+  max: 50
+  triggers:
+    - trigger: event
+      event_type: esphome.canbus_button
+  actions:
+    - action: esphome.canbus_gateway_ha_ack_event
+      data:
+        # Event data values are strings (gateway convention); the service wants an int.
+        # Default -1 (not 0) so a malformed event without event_id never ACKs a real
+        # pending entry — it surfaces as "ACK for unknown event_id" on the gateway.
+        event_id: "{{ trigger.event.data.event_id | int(-1) }}"
