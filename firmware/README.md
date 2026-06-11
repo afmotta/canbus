@@ -101,6 +101,39 @@ Nodes have no WiFi/API and require no secrets.
 
 ---
 
+## Sensor kit (ADR-0006)
+
+Per-room environment sensors — **SHT45** (precision T/RH, `sht4x` component, addr `0x44`) and
+**SEN66** (PM/T/RH/VOC/NOx/CO₂, official ESPHome `sen6x` component, addr `0x6B`) — ship as the
+opt-in package `packages/sensor_kit.yaml`. Every measurement is sent as its own CAN frame on
+`can_id(CAT_SENSOR, node_id)` every 30 s: `[PROTO_V1, status, meas_type LE16, value LE32]`,
+using the `canbus_protocol.h` constants/helpers merged in PR #19.
+
+- **Enable per node** via the `sensors` column in `registry/nodes.csv` (blank/`0` = none,
+  `1` = kit) and re-run `tools/generate_nodes.py`. Never hand-edit `nodes/`.
+- **Binding rule:** sensor frames carry the host node's `node_id` — a sensor-equipped node's
+  registry room must be the sensors' physical room (ADR-0006 §5).
+- **Status mapping:** reading `NaN` → `SENSOR_STATUS_UNAVAILABLE` (covers SEN66 warm-up);
+  ±inf / int32 overflow or negative raw for an unsigned quantity → `SENSOR_STATUS_OUT_OF_RANGE`;
+  otherwise `SENSOR_STATUS_OK` with the scaled value. Degraded frames are sent when the
+  component publishes a reading at all (`sen6x` publishes NaN sentinels; `sht4x` publishes
+  nothing on a hard I2C failure — there the consumer's 90 s staleness rule is the only cover).
+  The consumer (the dedicated HVAC controller, external firmware) ignores non-OK values.
+- **Frame pacing:** the send script runs `mode: queued` with 25 ms inter-frame spacing — a
+  SEN66 update bursts 9 channels at once and the MCP2515 has only 3 TX mailboxes, so unspaced
+  sends would systematically drop the later measurements every cycle.
+- **I2C pins (verified):** SDA = `GPIO6`, SCL = `GPIO7` (RP2040 I2C1 pair, clear of MCP2515
+  GPIO2/3/4/9/11 and buttons GPIO20–27) — confirmed by Alberto, 2026-06-11. If the wiring
+  ever changes, update the `i2c_sda`/`i2c_scl` defaults **in `packages/sensor_kit.yaml`
+  itself** (the board design is fixed, so the wiring is fleet-wide; generated node files
+  carry no per-node pin substitutions).
+- > **⚠️ Still unverified:** SEN66 power over the QwiicBus run (ADR-0006 open item 3) —
+  > confirm voltage/current against the host rail and fan inrush per run.
+- Compile check without touching generated nodes:
+  `esphome compile firmware/tests/compile_sensor_node.yaml`.
+
+---
+
 ## ha_ready Arbitration Prototype (ADR-0003)
 
 The gateway carries a prototype of ADR-0003's HA-readiness arbitration: HA proves liveness

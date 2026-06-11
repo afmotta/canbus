@@ -1,8 +1,8 @@
 ---
 adr: 0006
 title: 'Sensor data transport over CAN (CAT_SENSOR)'
-status: 'Proposed'
-date: '2026-06-04'
+status: 'Accepted'
+date: '2026-06-11'
 deciders: ['Alberto']
 author: 'Winston (System Architect)'
 dependsOn:
@@ -14,19 +14,26 @@ relatedDocuments:
   - _bmad-output/planning-artifacts/adrs/0004-information-model-and-addressing-vs-knx.md
   - _bmad-output/planning-artifacts/adrs/0005-can-bus-topology-segmented-multi-bus.md
   - _bmad-output/planning-artifacts/adrs/0007-flat-node-id-with-central-meaning-map.md
-  - firmware/common/canbus_protocol.h
+  - firmware/protocol/canbus_protocol.h
 ---
 
 # ADR-0006: Sensor data transport over CAN (CAT_SENSOR)
 
 ## Status
 
-**Proposed — re-keyed by ADR-0007 (2026-06-06).** Under the flat-`node_id` model (Extended IDs,
-`[category:4][node_id:13][reserved:12]`), `CAT_SENSOR` is a first-class **4-bit category** and
-sensor frames are `[CAT_SENSOR][node_id]` with `measurement_type` **and** the value **in the
-payload** (the ID's low bits stay reserved); the room is derived centrally from `node_id`. The
-measurement-type enum and value-encoding table below are unchanged — only the addressing moves
-to `node_id`. The HVAC side remains **out of scope**.
+**Accepted (2026-06-11).** The protocol layer (open item 1: `CAT_SENSOR`, measurement/status
+enums, `SENSOR_PAYLOAD_MIN`, `sensor_payload()` builder and decoders) was merged in PR #19
+(`firmware/protocol/canbus_protocol.h`, covered by `firmware/tests/test_protocol.cpp`). The
+node-side TX path ships with this acceptance as `firmware/packages/sensor_kit.yaml` (SHT45 via
+`sht4x`, SEN66 via ESPHome's official `sen6x` component — resolving open item 2 — at the 30 s
+cadence), opt-in per node via the `sensors` column in `registry/nodes.csv`. The consumer is the
+dedicated HVAC controller (external firmware); open items 3–5 remain open below.
+
+Previously: **Proposed — re-keyed by ADR-0007 (2026-06-06).** Under the flat-`node_id` model
+(Extended IDs, `[category:4][node_id:13][reserved:12]`), `CAT_SENSOR` is a first-class **4-bit
+category** and sensor frames are `[CAT_SENSOR][node_id]` with `measurement_type` **and** the
+value **in the payload** (the ID's low bits stay reserved); the room is derived centrally from
+`node_id`. The HVAC side remains **out of scope**.
 
 ## Context
 
@@ -179,16 +186,19 @@ can monitor their health.
 - The host-shares-the-sensor's-room rule constrains which node a sensor may attach to.
 
 ### Open items
-1. **Implement protocol constants/helpers** in `canbus_protocol.h`: measurement enum, status
-  enum, `SENSOR_PAYLOAD_MIN = 8`, a `sensor_payload()` builder, and `payload_sensor_status()`
-  / `payload_measurement_type()` / `payload_sensor_value32()` decoders. (`CAT_SENSOR = 4`
-  already exists; the frame id is `can_id(CAT_SENSOR, node_id)` — no dedicated channel field.)
-2. **Verify ESPHome SEN66 support** (or write the custom I2C component).
-3. **Verify SEN66 power** over QwiicBus per run.
+1. ~~**Implement protocol constants/helpers** in `canbus_protocol.h`~~ — **done (PR #19)**:
+  measurement enum, status enum, `SENSOR_PAYLOAD_MIN = 8`, `sensor_payload()` builder, and
+  `payload_sensor_status()` / `payload_measurement_type()` / `payload_sensor_value32()` decoders.
+2. ~~**Verify ESPHome SEN66 support**~~ — **resolved**: ESPHome ships an official `sen6x`
+  component (SEN62/63C/65/66/68/69C; esphome/esphome#9254); used by
+  `firmware/packages/sensor_kit.yaml`, no custom component needed.
+3. **Verify SEN66 power** over QwiicBus per run. (The sensor kit's I2C pins are verified:
+  SDA=GPIO6 / SCL=GPIO7, Alberto 2026-06-11.)
 4. Encoders/decoders + a category-mask handler on the HVAC controller, including the 90 s
   staleness rule.
 5. Extend the registry/commissioning UI with node role and attached sensor metadata where
-  needed, so the same-room host rule can be validated.
+  needed, so the same-room host rule can be validated. (The `sensors` registry column added at
+  acceptance is a presence flag only; role metadata/validation remains open.)
 
 ## Notes
 Depends on ADR-0001 (categories/IDs). Realises ADR-0004 D2 (light typed payloads). Consumer

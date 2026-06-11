@@ -23,7 +23,7 @@ import generate_nodes  # regenerate node_map.h after an edit
 
 HERE = Path(__file__).parent
 CSV_PATH = HERE.parent / "registry" / "nodes.csv"
-FIELDS = ["node_id", "floor", "room", "board", "location"]
+FIELDS = ["node_id", "floor", "room", "board", "location", "sensors"]
 MAX_RB = 255  # room/board are uint8 in node_map.h
 
 
@@ -37,7 +37,11 @@ def write_rows(rows):
         w = csv.DictWriter(f, fieldnames=FIELDS)
         w.writeheader()
         for r in rows:
-            w.writerow({k: r[k] for k in FIELDS})
+            # Rows read from a pre-ADR-0006 CSV have no sensors key — default to 0.
+            # Explicit None check: values may be falsy-but-valid (int 0 from
+            # apply_assignment, "0" placeholders) and must round-trip untouched.
+            w.writerow({k: ("0" if k == "sensors" else "") if r.get(k) is None else r[k]
+                        for k in FIELDS})
 
 
 def apply_assignment(rows, node_id, *, room=None, board=None, floor=None, location=None):

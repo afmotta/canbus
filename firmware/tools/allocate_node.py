@@ -21,7 +21,7 @@ REGISTRY = HERE.parent / "registry"
 CSV_PATH = REGISTRY / "nodes.csv"
 HWM_PATH = REGISTRY / "node_id_hwm"
 NODE_ID_MAX = 8191  # 13 bits, must match canbus_protocol.h / generate_nodes.py
-HEADER = ["node_id", "floor", "room", "board", "location"]
+HEADER = ["node_id", "floor", "room", "board", "location", "sensors"]
 
 
 def existing_max() -> int:
@@ -41,12 +41,26 @@ def main():
         raise SystemExit(f"node_id space exhausted (max {NODE_ID_MAX})")
 
     new_csv = not CSV_PATH.exists()
+    if not new_csv:
+        # Migrate a pre-ADR-0006 CSV (no sensors column) before appending a 6-field
+        # row — otherwise DictReader files the trailing value under restkey and a
+        # later hand-edit to sensors=1 is silently ignored.
+        with open(CSV_PATH, newline="") as f:
+            rows = list(csv.reader(f))
+        if rows and "sensors" not in rows[0]:
+            rows[0].append("sensors")
+            for r in rows[1:]:
+                r.append("0")
+            with open(CSV_PATH, "w", newline="") as f:
+                csv.writer(f).writerows(rows)
+            print("Migrated nodes.csv: added sensors column (0 for existing rows).")
     with open(CSV_PATH, "a", newline="") as f:
         w = csv.writer(f)
         if new_csv:
             w.writerow(HEADER)
-        # Identity-only: floor/room/board/location are placeholders until commissioning.
-        w.writerow([next_id, 0, 0, 0, f"node {next_id} (unassigned)"])
+        # Identity-only: floor/room/board/location are placeholders until commissioning;
+        # sensors defaults to 0 (set it in nodes.csv when fitting the ADR-0006 kit).
+        w.writerow([next_id, 0, 0, 0, f"node {next_id} (unassigned)", 0])
 
     HWM_PATH.write_text(f"{next_id}\n")
     print(f"Allocated node_id {next_id} (floor/room/board/location unassigned — set at commissioning).")

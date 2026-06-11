@@ -8,8 +8,12 @@ Usage:
     3. Generated configs appear in nodes/
 
 CSV format:
-    node_id,floor,room,board,location
-    100,0,7,0,"Ground floor hallway"
+    node_id,floor,room,board,location,sensors
+    100,0,7,0,"Ground floor hallway",0
+
+The optional `sensors` column (blank/0 = none, 1 = SHT45+SEN66 kit) adds the ADR-0006
+sensor_kit package to the generated node. Sensor frames carry the host node's node_id,
+so a sensor-equipped node's registry room must be the sensors' physical room.
 
 Flat node_id model (ADR-0007): node_id is the node's only identity, carried in the 29-bit
 Extended CAN ID. It is the ONLY thing flashed into the node. floor/room/board/location are
@@ -36,7 +40,7 @@ TEMPLATE = """\
 # flash time (the node is flashed at allocation, positioned/commissioned later) — they live in
 # the registry and the gateway's node_map.h, never here (ADR-0007).
 # Buttons:  standard 8-button set (btn0–btn7) from packages/base_node.yaml
-# CAN IDs (29-bit Extended, computed at runtime from node_id):
+{sensor_comment}# CAN IDs (29-bit Extended, computed at runtime from node_id):
 #   Input  = 0x{input_id:08X}  (CAT_INPUT,  node -> controller, button events)
 #   Status = 0x{status_id:08X}  (CAT_STATUS, node -> controller, heartbeat)
 # =============================================================================
@@ -47,13 +51,21 @@ substitutions:
 
 packages:
   base: !include ../packages/base_node.yaml
-"""
+{sensor_pkg}"""
+
+# Appended to TEMPLATE for rows with sensors=1 (ADR-0006). The sensor frames carry the host
+# node's node_id, so the host's registry room must be the sensors' physical room.
+SENSOR_COMMENT = (
+    "# Sensors:  SHT45 + SEN66 kit from packages/sensor_kit.yaml "
+    "(CAT_SENSOR, host room = sensor room)\n"
+)
+SENSOR_PKG = "  sensor_kit: !include ../packages/sensor_kit.yaml\n"
 
 FLOOR_LABELS = {0: "Ground", 1: "First", 2: "Second", 3: "Third"}
 EXAMPLE_ROWS = [
-    ["node_id", "floor", "room", "board", "location"],
-    [100, 0, 7, 0, "Ground floor hallway"],
-    [101, 0, 8, 0, "Ground floor living room"],
+    ["node_id", "floor", "room", "board", "location", "sensors"],
+    [100, 0, 7, 0, "Ground floor hallway", 0],
+    [101, 0, 8, 0, "Ground floor living room", 0],
 ]
 
 # CAN ID layout — must match canbus_protocol.h: [category:4][node_id:13][reserved:12].
@@ -126,8 +138,26 @@ def main():
 
     with open(csv_path, newline="") as f:
         reader = csv.DictReader(f)
+        # A misspelled sensors header ("Sensors", " sensors") would silently disable
+        # every sensor kit (row.get falls back to 0); a missing column is legitimate
+        # legacy format, a near-miss is an error.
+        fields = reader.fieldnames or []
+        if "sensors" not in fields:
+            near = [c for c in fields if c.strip().lower() == "sensors"]
+            if near:
+                print(f"ERROR: CSV column '{near[0]}' — did you mean 'sensors'?", file=sys.stderr)
+                sys.exit(1)
         for row in reader:
             location = row["location"]
+
+            # Optional sensors column (ADR-0006): blank/0 = none, 1 = SHT45+SEN66 kit.
+            # Strict on anything else so a registry typo can't silently drop a sensor kit.
+            sensors_raw = (row.get("sensors") or "0").strip()
+            if sensors_raw not in ("", "0", "1"):
+                print(f"ERROR: Invalid sensors value '{sensors_raw}' on CSV row {reader.line_num} "
+                      f"(valid: blank, 0, 1)", file=sys.stderr)
+                sys.exit(1)
+            has_sensors = sensors_raw == "1"
 
             try:
                 node_id = int(row["node_id"])
@@ -172,6 +202,8 @@ def main():
                 node_id=node_id,
                 input_id=input_id,
                 status_id=status_id,
+                sensor_comment=SENSOR_COMMENT if has_sensors else "",
+                sensor_pkg=SENSOR_PKG if has_sensors else "",
             )
 
             out_path = out_dir / f"{name}.yaml"
@@ -180,7 +212,8 @@ def main():
 
             floor_groups.setdefault(floor, []).append((node_id, room, board, location))
             map_entries.append((node_id, room, board, location))
-            print(f"  ✓ {name}.yaml  Input=0x{input_id:08X}  node_id={node_id}  [{location}]")
+            sensor_note = "  +sensors" if has_sensors else ""
+            print(f"  ✓ {name}.yaml  Input=0x{input_id:08X}  node_id={node_id}  [{location}]{sensor_note}")
             count += 1
 
     map_path = ROOT / "protocol" / "node_map.h"

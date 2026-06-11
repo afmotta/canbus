@@ -1,0 +1,20 @@
+# =============================================================================
+# compile_sensor_node.yaml — compile-check config for the ADR-0006 sensor kit
+# =============================================================================
+# Hand-maintained (NOT generated): validates that base_node + sensor_kit build
+# together without touching the generated nodes/ output. Mirrors what
+# generate_nodes.py emits for a registry row with sensors=1. node_id 999 is just
+# a scratch value — nothing reserves it, so NEVER flash this config to hardware;
+# it exists only for esphome config/compile.
+#
+#   esphome config  firmware/tests/compile_sensor_node.yaml
+#   esphome compile firmware/tests/compile_sensor_node.yaml
+# =============================================================================
+
+substitutions:
+  node_id: "999"
+  debounce_ms: "50"
+
+packages:
+  base: !include ../packages/base_node.yaml
+  sensor_kit: !include ../packages/sensor_kit.yaml
