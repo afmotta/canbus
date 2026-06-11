@@ -1,8 +1,9 @@
 ---
 adr: 0005
 title: 'CAN bus topology: segmented multi-bus with inter-segment coupling'
-status: 'Proposed'
+status: 'Accepted'
 date: '2026-06-04'
+acceptedDate: '2026-06-10'
 deciders: ['Alberto']
 author: 'Winston (System Architect)'
 dependsOn:
@@ -18,13 +19,24 @@ relatedDocuments:
 
 ## Status
 
-**Proposed.** Two decisions are made: **(1)** the bus is **segmented** (a single bus is not
-viable — below), and **(2)** the coupling method is **software bridges** (store-and-forward).
-**Segment count remains open**, pending a cable-budget/zone sketch (see open items). The
-bit rate is frozen at **125 kbps** across all CAN segments, matching the current architecture
-and firmware. The coupling-method geometry tiebreaker is resolved: the zones cannot all
-home-run to the controller, so controller-as-hub is rejected despite its reliability
-strengths.
+**Accepted (2026-06-10).** Two decisions are made: **(1)** the bus is **segmented** (a single
+bus is not viable — below), and **(2)** the coupling method is **software bridges**
+(store-and-forward). **Segment count remains open**, pending a cable-budget/zone sketch (see
+open items). The bit rate is frozen at **125 kbps** across all CAN segments, matching the
+current architecture and firmware. The coupling-method geometry tiebreaker is resolved: the
+zones cannot all home-run to the controller, so controller-as-hub is rejected despite its
+reliability strengths.
+
+At acceptance, open item 2 (bridge firmware platform) was resolved in favor of **minimal
+ESPHome** (one toolchain across the fleet), and a first bridge firmware landed at
+`firmware/bridge/bridge.yaml`, targeting the **LilyGO T-2CAN** (ESP32-S3; per LilyGO's
+reference firmware its two CAN ports are one built-in TWAI controller plus one MCP2515 —
+not two MCP2515s). The store-and-forward queue/pacing logic is natively tested pure logic
+in `firmware/protocol/bridge_forwarding.h` (mirroring the `ha_arbitration.h` pattern). The bridge heartbeats toward the controller as a normal node (flat `node_id`,
+ADR-0007) and latches a queue-overflow error flag, so a dead or degraded bridge is observable
+at the gateway. Open items 1 (segment count) and 4–6 (per-bridge power, hardware soak
+test of the watchdog/fail-safe behavior, pricing re-verification) remain open — none block
+acceptance of the topology and coupling-method decisions recorded here.
 
 **Governing criterion: reliability** (not cost or firmware effort — Alberto is comfortable
 writing firmware; the system must be dependable as always-on house infrastructure). The
@@ -173,12 +185,15 @@ bridge ~$15–35). The cheap end is the DIY/firmware end.
 ## Open items
 1. **Cable-budget / zone sketch** — number of segments, approximate runs, where they
   converge. Now sets the **segment/bridge count** (the *method* and bit rate are decided).
-2. **Bridge firmware platform** — minimal/stripped ESPHome (one toolchain, `on_frame` →
-   `send_data`) vs lean custom firmware for a pure-forwarder. Lean toward whichever is
-   easiest to make demonstrably fail-safe; radios off either way.
+2. **Bridge firmware platform** — ~~minimal/stripped ESPHome (one toolchain, `on_frame` →
+   `send_data`) vs lean custom firmware for a pure-forwarder~~ **Resolved at acceptance
+   (2026-06-10): minimal ESPHome** — one toolchain with the rest of the fleet; radios off
+   (no `wifi:`/`api:`/`ota:` sections at all). See `firmware/bridge/bridge.yaml`.
 3. **Forwarding rules** — start with **forward-all both ways** (simplest, most reliable;
    the controller needs all node traffic and management must reach every segment). Add
-   selective filtering only if backbone load ever demands it.
+   selective filtering only if backbone load ever demands it. The initial firmware
+   implements forward-all with paced store-and-forward queues
+   (`firmware/protocol/bridge_forwarding.h`).
 4. **Per-bridge power** — likely a power rail alongside CAN; size for reliability.
 5. **Bridge reliability validation** — soak-test the watchdog/fail-safe behavior (a hung
    bridge must go silent, never babble).

@@ -154,3 +154,37 @@ placeholder hash.
   (default `dev-unbound`) must match the hash HA's heartbeat sends.
 - Pure logic lives in `protocol/ha_arbitration.h`; native test:
   `g++ -std=c++17 -Wall -Wextra firmware/tests/test_ha_arbitration.cpp -o /tmp/arb && /tmp/arb`
+
+---
+
+## CAN Segment Bridge (ADR-0005)
+
+The bus is segmented (ADR-0005, accepted 2026-06-10): a backbone segment plus per-zone
+secondaries in a strict loop-free tree, joined by store-and-forward **software bridges**.
+`bridge/bridge.yaml` is the bridge firmware, targeting the **LilyGO T-2CAN** (ESP32-S3).
+The board's two CAN ports are asymmetric: one is the S3's built-in TWAI controller
+(backbone side — interrupt-driven RX with a deep driver queue, suiting the aggregate
+backbone traffic), the other an MCP2515 on SPI (zone side) with a hardware reset line on
+GPIO9 pulsed at boot. Forward-all in both directions, plus its own node-style heartbeat on
+the backbone side so the gateway sees a dead bridge as a missing heartbeat.
+
+ADR-0005's mandatory reliability requirements are mapped directly in the config:
+single-purpose firmware, **no radios** (no `wifi:`/`api:`/`ota:` — logs and flashing are
+USB-serial), esp-idf watchdogs + brownout detector with panic-reboot, and conservative
+paced forwarding (queues buffer bursts; the drain cap meters TX to what the MCP2515 — the
+weaker TX side, 3 buffers — sustains at 125 kbps). A drop anywhere latches
+`ERR_BRIDGE_QUEUE_OVERFLOW` into the heartbeat until reboot.
+
+- Identity: bridges share the flat `node_id` space (ADR-0007). Allocate an id with
+  `tools/allocate_node.py`, set it as the `node_id` substitution, and commission it like a
+  node so the gateway names it. (`generate_nodes.py` will also emit an unused
+  `nodes/nodeNNN.yaml` for a bridge id — ignore it; `bridge/bridge.yaml` is the config.)
+- Board, pins, MCP2515 clock (16 MHz), and the GPIO9 reset sequence come from LilyGO's
+  reference firmware:
+  <https://github.com/Xinyuan-LilyGO/T-2Can/blob/main/esphome/can.yaml>
+- Pure forwarding logic lives in `protocol/bridge_forwarding.h`; native test:
+  `g++ -std=c++17 -Wall -Wextra firmware/tests/test_bridge_forwarding.cpp -o /tmp/bridge && /tmp/bridge`
+- Before wall installation, the ADR-0005 open item 5 soak test must observe on hardware:
+  zone-side RX behavior under bursts (ESPHome polls the MCP2515 from `loop()`; 2 RX
+  buffers), and watchdog/brownout recovery degrading to *silent* — never holding a segment
+  dominant.

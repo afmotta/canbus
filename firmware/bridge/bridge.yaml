@@ -1,0 +1,217 @@
+# =============================================================================
+# bridge.yaml — CAN segment bridge (store-and-forward, ADR-0005)
+# =============================================================================
+# Hardware: LilyGO T-2CAN (ESP32-S3). The board's two CAN ports are NOT two
+#           MCP2515s: one is the ESP32-S3's built-in TWAI controller, the
+#           other an MCP2515 on SPI with a hardware reset line on GPIO9.
+#           Board/pins/clock taken from LilyGO's reference firmware:
+#           https://github.com/Xinyuan-LilyGO/T-2Can/blob/main/esphome/can.yaml
+# Role:     Joins one zone (secondary) segment to the backbone segment in the
+#           loop-free tree. Forward-all both ways (ADR-0005 open item 3): the
+#           controller must hear every node, and management/commissioning
+#           frames must reach every secondary. Plus its own CAT_STATUS
+#           heartbeat on the backbone side, so a dead/silent bridge is
+#           observable at the controller like any node.
+#
+# Port assignment: the TWAI port is the BACKBONE side — its RX path is
+# interrupt-driven with a deep driver queue, suiting the segment that carries
+# the aggregate traffic of every zone. The MCP2515 (polled from loop(), 2 RX
+# buffers) takes the single-zone side.
+#
+# ADR-0005 mandatory reliability requirements, mapped:
+#   - Single-purpose firmware: this file only forwards + heartbeats. Never mix
+#     node/actuator roles in here.
+#   - Radios off: no wifi/api/ota/bluetooth sections — the WiFi stack is a
+#     known source of heap/stack instability and the bridge lives on CAN only.
+#     Logs and (re)flash are USB-serial.
+#   - Watchdog + brownout + fail-safe: esp-idf's interrupt/task watchdogs and
+#     brownout detector, with CONFIG_ESP_TASK_WDT_PANIC so a wedged loop
+#     reboots instead of limping. A hung/rebooting bridge stops forwarding —
+#     it degrades to "silent" (both controllers stop TX without firmware
+#     service); it never holds a segment dominant.
+#   - Conservative forwarding: store-and-forward queues with paced drain
+#     (bridge_forwarding.h) — bursts are buffered and metered out at a rate
+#     even the weaker MCP2515 TX side (3 buffers) sustains at 125 kbps; drops
+#     are counted and latched into the heartbeat error flags
+#     (ERR_BRIDGE_QUEUE_OVERFLOW).
+#
+# Known validation gaps (ADR-0005 open item 5 — soak test before install):
+#   - The zone side (MCP2515) is polled from loop() (~16 ms); with 2 RX
+#     buffers a sustained >2-frames-per-poll burst can drop frames at RX
+#     before the queue ever sees them. Fine at home-scale event rates;
+#     verify under the bench burst test.
+#   - Watchdog/brownout recovery and never-babble behavior must be observed
+#     on hardware (kill/hang the firmware mid-traffic, scope the bus).
+# =============================================================================
+
+substitutions:
+  # The bridge's flat node_id (ADR-0007) for its own heartbeat. Placeholder —
+  # allocate a real id via tools/allocate_node.py before flashing (bridges
+  # share the node_id space; commissioning names it e.g. "bridge - floor 1").
+  # Note: generate_nodes.py will also emit an unused nodes/nodeNNN.yaml for a
+  # bridge row — ignore it; this file is the bridge's config.
+  node_id: "200"
+
+esphome:
+  name: canbus-bridge-${node_id}
+  friendly_name: "CAN Bridge ${node_id}"
+  includes:
+    - ../protocol/canbus_protocol.h
+    - ../protocol/bridge_forwarding.h
+  # MCP2515 hardware reset pulse before its component initializes (the
+  # mcp2515 below carries setup_priority -100 so it sets up after this runs).
+  # Sequence and timing from LilyGO's reference firmware.
+  on_boot:
+    priority: 800.0
+    then:
+      - output.turn_on: mcp_rst_pin
+      - delay: 100ms
+      - output.turn_off: mcp_rst_pin
+      - delay: 100ms
+      - output.turn_on: mcp_rst_pin
+      - delay: 100ms
+      - lambda: |-
+          ESP_LOGI("bridge", "Bridge ${node_id} online (backbone <-> zone, forward-all)");
+          ESP_LOGI("bridge", "  Status CAN ID: 0x%08X", can_id(CAT_STATUS, ${node_id}));
+
+esp32:
+  board: esp32-s3-devkitm-1
+  framework:
+    type: esp-idf
+    # Defaults already enable the interrupt watchdog, task watchdog, and
+    # brownout detector; these pin the ADR-0005 fail-safe posture explicitly
+    # and make a watchdog trip reboot (clean restart) rather than just log.
+    sdkconfig_options:
+      CONFIG_ESP_TASK_WDT_PANIC: y
+      CONFIG_ESP_INT_WDT: y
+      CONFIG_ESP_BROWNOUT_DET: y
+      CONFIG_BOOTLOADER_WDT_ENABLE: y
+
+# --------------- Logging (USB serial only — no network on a bridge) ---------------
+logger:
+  level: INFO
+
+# NO wifi:, api:, ota:, bluetooth: — ADR-0005 "radios off" is load-bearing.
+
+# --------------- MCP2515 reset line (T-2CAN: GPIO9) ---------------
+output:
+  - platform: gpio
+    pin: GPIO9
+    id: mcp_rst_pin
+
+# --------------- Forwarding state ---------------
+# Queues/counters live in bridge_forwarding.h static stores (custom struct
+# types cannot be ESPHome globals — see header). Globals below are only the
+# heartbeat uptime bookkeeping, same scheme as base_node.yaml.
+globals:
+  - id: uptime_rollovers
+    type: uint16_t
+    initial_value: "0"
+  - id: last_millis
+    type: uint32_t
+    initial_value: "0"
+
+# --------------- SPI bus for the MCP2515 (T-2CAN pinout) ---------------
+spi:
+  clk_pin: GPIO12
+  mosi_pin: GPIO11
+  miso_pin: GPIO13
+
+# --------------- The two CAN segments ---------------
+# The protocol is Extended-ID-only (ADR-0007); standard-ID frames are
+# out-of-spec on this bus and are not forwarded. can_id/can_id_mask 0 in
+# on_frame means "match every extended frame". Neither controller receives
+# its own transmissions in normal mode (TWAI and MCP2515 alike), so
+# forward-all cannot echo; the tree topology (ADR-0005: strictly no loops)
+# guarantees no multi-bridge cycle either.
+canbus:
+  # Backbone side — ESP32-S3 built-in TWAI (T-2CAN: TX=GPIO7, RX=GPIO6).
+  - platform: esp32_can
+    id: can_backbone
+    use_extended_id: true
+    # Component default TX id (CAT_STATUS base). Every send specifies an
+    # explicit can_id + use_extended_id, so this is never relied on.
+    can_id: 0x06000000
+    tx_pin: GPIO7
+    rx_pin: GPIO6
+    bit_rate: 125KBPS
+    on_frame:
+      - can_id: 0
+        can_id_mask: 0
+        use_extended_id: true
+        then:
+          - lambda: |-
+              if (!bridge_enqueue(bridge_queue_to_zone(), bridge_stats_to_zone(),
+                                  can_id, true, x)) {
+                ESP_LOGW("bridge", "to-zone queue full; dropped frame 0x%08X", can_id);
+              }
+
+  # Zone side — MCP2515 (T-2CAN: CS=GPIO10, 16 MHz crystal). setup_priority
+  # -100 keeps its init after the on_boot reset pulse (LilyGO reference).
+  - platform: mcp2515
+    setup_priority: -100.0
+    id: can_zone
+    use_extended_id: true
+    can_id: 0x06000000
+    cs_pin: GPIO10
+    clock: 16MHZ
+    mode: NORMAL
+    bit_rate: 125KBPS
+    on_frame:
+      - can_id: 0
+        can_id_mask: 0
+        use_extended_id: true
+        then:
+          - lambda: |-
+              if (!bridge_enqueue(bridge_queue_to_backbone(), bridge_stats_to_backbone(),
+                                  can_id, true, x)) {
+                ESP_LOGW("bridge", "to-backbone queue full; dropped frame 0x%08X", can_id);
+              }
+
+interval:
+  # Paced drain: at most BRIDGE_DRAIN_MAX frames per direction per tick (200
+  # frames/s/direction at 10 ms) — see bridge_forwarding.h for the TX-buffer
+  # arithmetic behind the cap.
+  - interval: 10ms
+    then:
+      - lambda: |-
+          for (const auto &f : bridge_drain(bridge_queue_to_backbone(), bridge_stats_to_backbone()))
+            id(can_backbone).send_data(f.can_id, f.extended,
+                                       std::vector<uint8_t>(f.data, f.data + f.len));
+          for (const auto &f : bridge_drain(bridge_queue_to_zone(), bridge_stats_to_zone()))
+            id(can_zone).send_data(f.can_id, f.extended,
+                                   std::vector<uint8_t>(f.data, f.data + f.len));
+
+  # Heartbeat toward the controller (backbone side only) every 30 seconds,
+  # identical wire format to a node's. error_flags latches
+  # ERR_BRIDGE_QUEUE_OVERFLOW if the bridge has EVER dropped a frame, so a
+  # degraded bridge stays visible at the gateway until it is power-cycled.
+  - interval: 30s
+    then:
+      - lambda: |-
+          // Same millis() rollover accounting as base_node.yaml: the 30s tick
+          // observes every ~49.7-day uint32 wrap, so true uptime survives it.
+          uint32_t now = millis();
+          if (now < id(last_millis)) id(uptime_rollovers) += 1;
+          id(last_millis) = now;
+          uint64_t ms = ((uint64_t) id(uptime_rollovers) << 32) | now;
+          uint64_t hours = ms / 3600000ULL;
+          uint16_t uptime_h = hours > 65535ULL ? 65535 : (uint16_t) hours;
+          id(can_backbone).send_data(can_id(CAT_STATUS, ${node_id}), true,
+                                     heartbeat_payload(uptime_h,
+                                                       bridge_error_flags(bridge_stats_to_backbone(),
+                                                                          bridge_stats_to_zone())));
+
+  # Forwarding counters once a minute at INFO: the soak-test observable
+  # (ADR-0005 open item 5) and the only place drops are quantified.
+  - interval: 60s
+    then:
+      - lambda: |-
+          const BridgeStats &tb = bridge_stats_to_backbone();
+          const BridgeStats &tz = bridge_stats_to_zone();
+          ESP_LOGI("bridge",
+                   "to-backbone fwd=%u q=%u drop(of=%u,sz=%u) | to-zone fwd=%u q=%u drop(of=%u,sz=%u)",
+                   (unsigned) tb.forwarded, (unsigned) bridge_queue_to_backbone().size(),
+                   (unsigned) tb.dropped_overflow, (unsigned) tb.dropped_oversize,
+                   (unsigned) tz.forwarded, (unsigned) bridge_queue_to_zone().size(),
+                   (unsigned) tz.dropped_overflow, (unsigned) tz.dropped_oversize);
