@@ -181,8 +181,10 @@ belongs on Modbus/RS485 from the controller.
 
 ### Open items
 
-1. **Binding manifest tooling** — choose the manifest file format/location and generator
-  outputs for controller ESPHome YAML and HA automations.
+1. ~~**Binding manifest tooling** — choose the manifest file format/location and generator
+  outputs for controller ESPHome YAML and HA automations.~~ **Resolved** by **ADR-0009**
+  (accepted 2026-06-13): the manifest is `registry/bindings.yaml`, and `generate_nodes.py`
+  emits the controller artifacts + HA package, all hash-stamped from one run.
 2. **Timeout values** — set HA readiness heartbeat TTL and per-event ACK fallback timeout on
   target hardware so degraded switching remains acceptably fast without causing double
   actions. *In progress:* the machinery is prototyped on the PoC gateway with tunable

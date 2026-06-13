@@ -1,0 +1,27 @@
+# =============================================================================
+# bindings.yaml — the binding manifest (ADR-0009 §2, ADR-0003 fallback behavior as data)
+# =============================================================================
+# Source of record for what the house DOES: each binding maps a button gesture
+# (node_id, button, event) to a controller-side action (relay channel + op). This is the
+# second meaning-bearing artifact after nodes.csv; its canonical hash (tools/bindings.py)
+# is the manifest_hash the gateway and Home Assistant must agree on for ha_ready (ADR-0003).
+#
+# Hand-edited and reviewed by git diff. Run tools/generate_nodes.py after any change: it
+# validates every binding against nodes.csv and stamps the new hash into protocol/bindings.h.
+# BACK UP BY PUSHING: bindings are unrebuildable — an unpushed change is an unbacked-up house.
+#
+# Schema (strict subset — scalars only, no nesting; see tools/bindings.py):
+#   schema_version: 1
+#   bindings:
+#     - node_id: 100      # must exist in registry/nodes.csv
+#       button: 0         # 0–7 (standard 8-button set)
+#       event: single     # single | double | triple | hold | hold_release
+#       relay: 0          # controller relay channel (action vocabulary grows additively,
+#       op: toggle        #   ADR-0009 open item 1, blocked on ADR-0003 controller board)
+#
+# Empty for now: no bindings are authored until relay channels exist (fallback is still
+# log-only — ADR-0003 open item 7). An empty manifest still has a stable, real hash.
+# =============================================================================
+
+schema_version: 1
+bindings: []

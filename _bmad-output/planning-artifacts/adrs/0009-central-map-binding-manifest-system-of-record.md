@@ -1,8 +1,9 @@
 ---
 adr: 0009
 title: 'Central map & binding manifest: git as system of record, schema, generation pipeline, backup/restore, export contract'
-status: 'Proposed'
+status: 'Accepted'
 date: '2026-06-11'
+acceptedDate: '2026-06-13'
 deciders: ['Alberto']
 author: 'Winston (System Architect)'
 dependsOn:
@@ -25,12 +26,19 @@ relatedDocuments:
 
 ## Status
 
-**Proposed.** Resolves ADR-0007's last open item (§2: central-map schema, commissioning
-service, backup) and ADR-0003's open item 1 (binding-manifest format/location/tooling).
-Drafted from the 2026-06-11 gap analysis: the map now has **three consumers pulling on one
-undecided design** — the commissioning CLI (Phase 1, shipped), the `ha_ready` arbitration
-(live, but stubbed with `manifest_hash: "dev-unbound"`), and ADR-0006's HVAC controller
-(needs read-only map metadata). Deciding it once here prevents deciding it three times.
+**Accepted (2026-06-13).** Ratifies the git repository as the system of record for all
+meaning — identity, placement, and bindings — with every runtime copy generated, compiled,
+and hash-stamped from it. Resolves ADR-0007's last open item (§2: central-map schema,
+commissioning service, backup) and ADR-0003's open item 1 (binding-manifest
+format/location/tooling). Drafted from the 2026-06-11 gap analysis: the map had **three
+consumers pulling on one undecided design** — the commissioning CLI (Phase 1, shipped), the
+`ha_ready` arbitration (live, but stubbed with `manifest_hash: "dev-unbound"`), and
+ADR-0006's HVAC controller (needs read-only map metadata). Deciding it once here prevents
+deciding it three times. First implementation is split: ratification + the binding manifest
+(`registry/bindings.yaml`) + the canonical hash that un-stubs the arbitration land first;
+the export/visibility layer (`map.json`, the compiled bindings table, the generated HA
+package, drift-visibility entities) follows as a tracked slice — see open item 2 and
+`_bmad-output/implementation-artifacts/deferred-work.md`.
 
 ## Context
 

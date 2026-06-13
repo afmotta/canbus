@@ -6,8 +6,10 @@
 # the gateway's ha_readiness_heartbeat / ha_ack_event API services (gateway.yaml).
 #
 # - The heartbeat proves HA is alive AND running the same binding manifest: the
-#   manifest_hash below must match the gateway's ${manifest_hash} substitution
-#   ("dev-unbound" until the binding-manifest slice lands). Stop this automation
+#   manifest_hash below must match the gateway's compiled BINDINGS_MANIFEST_HASH
+#   (protocol/bindings.h, ADR-0009 §3). INTERIM: paste the hash printed by
+#   tools/generate_nodes.py here whenever registry/bindings.yaml changes — until the
+#   generated HA package (ADR-0009 §4, deferred) automates this. Stop this automation
 #   (or change the hash) to watch the gateway's "HA Ready" sensor drop and button
 #   presses log FALLBACK instead of firing events — that is the ADR-0003 degraded
 #   path, exercisable from the couch.
@@ -33,7 +35,9 @@
   actions:
     - action: esphome.canbus_gateway_ha_readiness_heartbeat
       data:
-        manifest_hash: "dev-unbound"
+        # Must equal the gateway's compiled BINDINGS_MANIFEST_HASH (protocol/bindings.h).
+        # Regenerate + re-paste from tools/generate_nodes.py when bindings.yaml changes.
+        manifest_hash: "d66767448ba37b2f"
 
 - id: canbus_gateway_ack_button_events
   alias: "CAN gateway: ACK forwarded button events"

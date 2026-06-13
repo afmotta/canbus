@@ -170,8 +170,9 @@ The gateway carries a prototype of ADR-0003's HA-readiness arbitration: HA prove
 service every 5 s; each button event forwarded to HA carries an `event_id` that HA must ACK
 via `ha_ack_event` before the fallback timeout. When HA is not ready — API disconnected,
 heartbeat stale, or manifest-hash mismatch — or an ACK is missed, the **fallback only logs**
-(`FALLBACK ...` at WARN): no relays exist yet, and the binding manifest is stubbed by a
-placeholder hash.
+(`FALLBACK ...` at WARN): no relays exist yet. The manifest hash is now real — the gateway
+compares the generated `BINDINGS_MANIFEST_HASH` (see Binding Manifest below), no longer a
+placeholder.
 
 - HA-side counterpart: copy `gateway/ha_arbitration_automations.yaml` into Home Assistant.
 - Observability: the gateway exposes a diagnostic **HA Ready** binary sensor, and the logs
@@ -179,10 +180,34 @@ placeholder hash.
   (actual fallback latency — `ack_timeout_ms` plus up to 250 ms sweep granularity), and
   `LATE ACK ... late=+` (an ACK landing after its fallback fired: the double-action window).
 - Tuning (resolves ADR-0003 open item 2 empirically) via `gateway.yaml` substitutions:
-  `ha_heartbeat_ttl_ms` (default 15000) and `ack_timeout_ms` (default 500); `manifest_hash`
-  (default `dev-unbound`) must match the hash HA's heartbeat sends.
+  `ha_heartbeat_ttl_ms` (default 15000) and `ack_timeout_ms` (default 500). The manifest hash
+  HA must echo is the generated `BINDINGS_MANIFEST_HASH`, not a substitution (see below).
 - Pure logic lives in `protocol/ha_arbitration.h`; native test:
   `g++ -std=c++17 -Wall -Wextra firmware/tests/test_ha_arbitration.cpp -o /tmp/arb && /tmp/arb`
+
+---
+
+## Binding Manifest (ADR-0009)
+
+`registry/bindings.yaml` is the binding manifest — ADR-0003's fallback behavior as data:
+each binding maps a gesture `(node_id, button, event)` to a controller action (`relay`/`op`).
+With `registry/nodes.csv` (identity + placement) it forms the central map; **git is the
+system of record** (ADR-0009), so push registry changes promptly — bindings are unrebuildable.
+
+- **Canonical hash:** `tools/bindings.py` computes the `manifest_hash` as SHA-256 over the
+  *parsed* manifest with sorted keys (formatting/comments don't matter), truncated to 16 hex.
+  `tools/generate_nodes.py` stamps it into `protocol/bindings.h` as `BINDINGS_MANIFEST_HASH`,
+  which the gateway compares against the hash HA echoes — agreement un-stubs `ha_ready`.
+- **Stdlib-only:** `bindings.py` ships a small reader for a strict YAML subset (scalars only,
+  no nesting) so the generator stays dependency-free. Native test:
+  `python3 firmware/tests/test_bindings.py`.
+- **Workflow:** edit `bindings.yaml` → `python3 tools/generate_nodes.py` (validates every
+  binding against `nodes.csv`, prints the hash) → recompile/flash the gateway. **Interim:**
+  paste the printed hash into `gateway/ha_arbitration_automations.yaml` until the generated
+  HA package (ADR-0009 §4) automates it.
+- **Deferred (follow-up slice):** `registry/map.json` export, the compiled `BINDINGS[]` table
+  in `bindings.h`, the generated HA package, and controller drift-visibility entities — see
+  `_bmad-output/implementation-artifacts/deferred-work.md`.
 
 ---
 

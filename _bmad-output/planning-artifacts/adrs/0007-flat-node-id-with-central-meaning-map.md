@@ -155,8 +155,11 @@ The cleaner pattern — and the one this ADR adopts — is the classic device mo
 1. **ID layout: resolved → 29-bit Extended `[category:4][node_id:13][reserved:12]`**
    (Decision §2). Remaining detail: freeze the `category` enum (incl. `CAT_EXTENDED`) in
    `canbus_protocol.h`; the low 12 bits stay **reserved** until a consumer needs them.
-2. Define the central-map schema + the controller's commissioning service (list/identify
-   nodes, edit the map) and its backup.
+2. ~~Define the central-map schema + the controller's commissioning service (list/identify
+   nodes, edit the map) and its backup.~~ **Resolved** by **ADR-0009** (accepted 2026-06-13):
+   `registry/nodes.csv` (placement) + `registry/bindings.yaml` (behavior) are the schema, the
+   Phase-1 CLIs (`allocate_node.py`/`commission.py`) stay the commissioning service, and the
+   git remote is the backup.
 3. `node_id` allocation tooling (persistent counter / next-free) + label printing.
 4. Implementation: move main's post-revert v1 *standard-ID* firmware to **Extended IDs**
    (`use_extended_id`), 4-bit category incl. `CAT_SENSOR`, `node_id`-only identity (drop

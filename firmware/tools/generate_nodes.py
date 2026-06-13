@@ -29,6 +29,8 @@ import csv
 import sys
 from pathlib import Path
 
+import bindings  # binding-manifest reader + canonical hash (ADR-0009)
+
 ROOT = Path(__file__).resolve().parent.parent  # firmware/
 
 TEMPLATE = """\
@@ -115,6 +117,50 @@ def write_node_map(entries, path: Path) -> None:
         "inline uint8_t node_map_board(uint16_t node_id) { auto e = node_map_find(node_id); return e ? e->board : NODE_MAP_UNKNOWN; }\n"
         "inline const char *node_map_name(uint16_t node_id) { auto e = node_map_find(node_id); return e ? e->name : \"unknown\"; }\n"
     )
+
+
+def write_bindings_header(manifest_hash: str, path: Path) -> None:
+    """Emit the controller's binding-manifest identity (ADR-0009 §3): the canonical hash of
+    bindings.yaml that ha_ready compares against the hash Home Assistant echoes (ADR-0003).
+
+    Hash-only and deterministic — no generation timestamp — so regenerating with unchanged
+    bindings produces no diff. The compiled BINDINGS[] table and a generated-at stamp are a
+    deferred additive slice (ADR-0009 §4/§6).
+    """
+    path.write_text(
+        "#pragma once\n\n"
+        "// =============================================================================\n"
+        "// bindings.h — GENERATED from registry/bindings.yaml by tools/generate_nodes.py. DO NOT EDIT.\n"
+        "// Binding-manifest identity for the ha_ready arbitration (ADR-0009 §3): the canonical\n"
+        "// hash of bindings.yaml, which the gateway compares against the hash Home Assistant\n"
+        "// echoes in its readiness heartbeat (ADR-0003). A mismatch keeps ha_ready off.\n"
+        "// =============================================================================\n\n"
+        f'inline constexpr char BINDINGS_MANIFEST_HASH[] = "{manifest_hash}";\n'
+    )
+
+
+def write_bindings_manifest(seen_node_ids, root: Path) -> str:
+    """Validate registry/bindings.yaml against the registry and stamp its hash into bindings.h.
+    Returns the manifest hash. Aborts (sys.exit) on an invalid manifest, writing nothing."""
+    bindings_path = root / "registry" / "bindings.yaml"
+    if not bindings_path.exists():
+        print(f"Creating empty {bindings_path} ...")
+        bindings_path.write_text("schema_version: 1\nbindings: []\n")
+
+    manifest = bindings.load_bindings(bindings_path)
+    errors = bindings.validate(manifest, set(seen_node_ids))
+    if errors:
+        print("ERROR: invalid binding manifest (registry/bindings.yaml):", file=sys.stderr)
+        for e in errors:
+            print(f"  - {e}", file=sys.stderr)
+        sys.exit(1)
+
+    manifest_hash = bindings.canonical_hash(manifest)
+    header_path = root / "protocol" / "bindings.h"
+    write_bindings_header(manifest_hash, header_path)
+    print(f"  ✓ {header_path.name}  (binding manifest hash {manifest_hash}, "
+          f"{len(manifest['bindings'])} binding(s))")
+    return manifest_hash
 
 
 def main():
@@ -220,7 +266,12 @@ def main():
     write_node_map(map_entries, map_path)
     print(f"  ✓ {map_path.name}  (central node_id -> room/board/name map, compiled into the gateway)")
 
+    # Binding manifest (ADR-0009): validate against the registry, hash, stamp into bindings.h.
+    manifest_hash = write_bindings_manifest(seen_node_ids, ROOT)
+
     print(f"\nGenerated {count} node configs in {out_dir}/")
+    print(f"Binding manifest hash: {manifest_hash}  "
+          f"(paste into HA readiness heartbeat — firmware/gateway/ha_arbitration_automations.yaml)")
     print("\n── CAN ID Map (Input id) ──")
     for floor in sorted(floor_groups):
         label = FLOOR_LABELS.get(floor, f"Floor {floor}")
