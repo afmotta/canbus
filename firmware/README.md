@@ -216,9 +216,12 @@ system of record** (ADR-0009), so push registry changes promptly — bindings ar
 - **Workflow:** edit `bindings.yaml` → `python3 tools/generate_nodes.py` (validates every
   binding against `nodes.csv`, prints the hash, regenerates all artifacts above) →
   recompile/flash the gateway. No re-paste step: the HA package carries the hash.
-- **Still deferred (separate slice):** controller drift-visibility entities (ADR-0009 §6) —
-  read-only HA diagnostic sensors exposing the compiled hash so "committed but not reflashed"
-  drift shows on a dashboard. See `_bmad-output/implementation-artifacts/deferred-work.md`.
+- **Drift visibility (ADR-0009 §6):** the gateway exposes two read-only HA diagnostic
+  `text_sensor`s — **Binding Manifest Hash** (`BINDINGS_MANIFEST_HASH`) and **Node Map
+  Version** (`NODE_MAP_VERSION`, mirroring `map.json`'s `map_version`). Both are compile-time
+  constants published once at boot. Compare them on a dashboard against the committed
+  `registry/map.json`: a mismatch means "committed in git but not yet reflashed" — the static
+  map's failure mode — shows up there instead of as a misbehaving button.
 
 ---
 

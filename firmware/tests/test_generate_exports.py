@@ -12,7 +12,9 @@ Covers the pure renderers added for the export slice:
 """
 
 import json
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
@@ -77,6 +79,39 @@ def test_bindings_header_populated_and_sorted():
     i100 = h.index('{100, 0, "single", 0, "toggle"}')
     i101 = h.index('{101, 3, "double", 2, "on"}')
     assert i100 < i101
+
+
+def test_node_map_emits_version_constant():
+    # node_map.h carries NODE_MAP_VERSION so the gateway can expose its compiled map
+    # identity as a drift-visibility diagnostic (ADR-0009 §6), without breaking the
+    # frozen-additive struct/accessor contract.
+    entries = [(101, 8, 0, "Living room"), (100, 7, 0, 'Hall "A"')]
+    version = "0123456789abcdef"
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "node_map.h"
+        g.write_node_map(entries, version, path)
+        h = path.read_text()
+    assert f'NODE_MAP_VERSION[] = "{version}";' in h
+    # The existing contract is intact: struct, sentinel, accessors, sorted rows, escaping.
+    assert "struct NodeMapEntry" in h
+    assert "NODE_MAP_UNKNOWN = 0xFF" in h
+    assert "node_map_name(" in h
+    assert h.index('{100, 7, 0, "Hall \\"A\\""},') < h.index('{101, 8, 0, "Living room"},')
+
+
+def test_generator_node_map_version_matches_map_json():
+    # ADR-0009 §6 drift correlation: the gateway-compiled NODE_MAP_VERSION must equal the
+    # map_version published in registry/map.json, or a dashboard comparison is meaningless.
+    # The generator is byte-stable (unchanged input regenerates no diff), so running it in
+    # place leaves the working tree clean.
+    firmware = Path(__file__).resolve().parent.parent
+    subprocess.run(
+        [sys.executable, "tools/generate_nodes.py"],
+        cwd=firmware, check=True, capture_output=True, text=True,
+    )
+    map_version = json.loads((firmware / "registry" / "map.json").read_text())["map_version"]
+    header = (firmware / "protocol" / "node_map.h").read_text()
+    assert f'NODE_MAP_VERSION[] = "{map_version}";' in header
 
 
 def test_ha_package_bakes_hash():

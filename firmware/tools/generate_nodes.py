@@ -89,8 +89,16 @@ def _c_str(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def write_node_map(entries, path: Path) -> None:
-    """Emit the gateway's compiled central map: node_id -> {room, board, name} (ADR-0007)."""
+def write_node_map(entries, map_version: str, path: Path) -> None:
+    """Emit the gateway's compiled central map: node_id -> {room, board, name} (ADR-0007).
+
+    NODE_MAP_VERSION is the same deterministic map_version stamped into registry/map.json
+    (build_map_export); compiling it in lets the gateway expose its map identity as a
+    drift-visibility diagnostic (ADR-0009 §6) that a dashboard compares against the committed
+    map.json — surfacing "committed in git but not yet reflashed" instead of a misbehaving
+    button. It tracks the full registry map (incl. floor/sensors), not just the compiled rows,
+    so the comparison is against map.json verbatim; over-signalling (a floor-only edit rolls
+    the version) errs toward a harmless reflash, the safe direction."""
     rows = "\n".join(
         f'    {{{nid}, {room}, {board}, "{_c_str(loc)}"}},'
         for nid, room, board, loc in sorted(entries)
@@ -104,7 +112,9 @@ def write_node_map(entries, path: Path) -> None:
         "// Central node_id -> {room, board, name} map (ADR-0007), compiled into the gateway.\n"
         "// An unknown node_id resolves to the sentinel (room/board 0xFF, name \"unknown\") —\n"
         "// i.e. a node that is on the bus but not yet in the map (uncommissioned).\n"
+        "// NODE_MAP_VERSION mirrors registry/map.json's map_version for drift visibility (§6).\n"
         "// =============================================================================\n\n"
+        f'inline constexpr char NODE_MAP_VERSION[] = "{map_version}";\n\n'
         "struct NodeMapEntry { uint16_t node_id; uint8_t room; uint8_t board; const char *name; };\n\n"
         "inline constexpr uint8_t NODE_MAP_UNKNOWN = 0xFF;\n\n"
         f"inline constexpr NodeMapEntry NODE_MAP[] = {{\n{rows}\n}};\n"
@@ -248,11 +258,12 @@ def render_ha_package(manifest_hash: str) -> str:
     )
 
 
-def write_exports(seen_node_ids, export_nodes, root: Path) -> str:
+def write_exports(seen_node_ids, export_nodes, root: Path):
     """Validate registry/bindings.yaml against the registry, then emit every binding-derived
     artifact from one source in one run (ADR-0009 §4/§7): bindings.h (hash + table), map.json
-    (read-only export), and ha_manifest_package.yaml (HA echoes the hash). Returns the
-    manifest hash. Aborts (sys.exit) on an invalid manifest, writing nothing."""
+    (read-only export), and ha_manifest_package.yaml (HA echoes the hash). Returns
+    (manifest_hash, map_version) — the latter is also compiled into node_map.h for drift
+    visibility (§6). Aborts (sys.exit) on an invalid manifest, writing nothing."""
     bindings_path = root / "registry" / "bindings.yaml"
     if not bindings_path.exists():
         print(f"Creating empty {bindings_path} ...")
@@ -283,7 +294,7 @@ def write_exports(seen_node_ids, export_nodes, root: Path) -> str:
     ha_path.write_text(render_ha_package(manifest_hash))
     print(f"  ✓ {ha_path.name}  (HA readiness heartbeat echoes the hash automatically)")
 
-    return manifest_hash
+    return manifest_hash, map_export["map_version"]
 
 
 def main():
@@ -390,13 +401,15 @@ def main():
             print(f"  ✓ {name}.yaml  Input=0x{input_id:08X}  node_id={node_id}  [{location}]{sensor_note}")
             count += 1
 
-    map_path = ROOT / "protocol" / "node_map.h"
-    write_node_map(map_entries, map_path)
-    print(f"  ✓ {map_path.name}  (central node_id -> room/board/name map, compiled into the gateway)")
-
     # Binding-derived exports (ADR-0009 §4/§7): validate the manifest against the registry,
     # then emit bindings.h (hash + fallback table), map.json, and the generated HA package.
-    manifest_hash = write_exports(seen_node_ids, export_nodes, ROOT)
+    # Run first because the map_version it computes is also compiled into node_map.h (§6
+    # drift visibility) — and so an invalid manifest aborts before node_map.h is rewritten.
+    manifest_hash, map_version = write_exports(seen_node_ids, export_nodes, ROOT)
+
+    map_path = ROOT / "protocol" / "node_map.h"
+    write_node_map(map_entries, map_version, map_path)
+    print(f"  ✓ {map_path.name}  (central node_id -> room/board/name map + map_version {map_version}, compiled into the gateway)")
 
     print(f"\nGenerated {count} node configs in {out_dir}/")
     print(f"Binding manifest hash: {manifest_hash}  "

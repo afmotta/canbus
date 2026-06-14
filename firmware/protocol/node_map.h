@@ -7,7 +7,10 @@
 // Central node_id -> {room, board, name} map (ADR-0007), compiled into the gateway.
 // An unknown node_id resolves to the sentinel (room/board 0xFF, name "unknown") —
 // i.e. a node that is on the bus but not yet in the map (uncommissioned).
+// NODE_MAP_VERSION mirrors registry/map.json's map_version for drift visibility (§6).
 // =============================================================================
+
+inline constexpr char NODE_MAP_VERSION[] = "08ba65f1e2523065";
 
 struct NodeMapEntry { uint16_t node_id; uint8_t room; uint8_t board; const char *name; };
 

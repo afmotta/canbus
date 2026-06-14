@@ -25,6 +25,17 @@ substitutions:
 esphome:
   name: canbus-gateway
   friendly_name: "CAN Bus Gateway"
+  # Drift visibility (ADR-0009 §6): publish the compiled map/binding identities once. They are
+  # compile-time constants (node_map.h / bindings.h), so the diagnostics below never poll — the
+  # state is set here and pushed to HA on connect. See the text_sensor block.
+  on_boot:
+    then:
+      - text_sensor.template.publish:
+          id: binding_manifest_hash
+          state: !lambda 'return std::string(BINDINGS_MANIFEST_HASH);'
+      - text_sensor.template.publish:
+          id: node_map_version
+          state: !lambda 'return std::string(NODE_MAP_VERSION);'
   includes:
     - ../protocol/canbus_protocol.h
     - ../protocol/node_map.h   # GENERATED central node_id -> room/board/name map (ADR-0007)
@@ -143,6 +154,23 @@ binary_sensor:
     lambda: |-
       return ha_ready(api::global_api_server->is_connected(), id(ha_hash_ok), id(ha_hb_seen),
                       id(last_ha_hb_ms), millis(), ${ha_heartbeat_ttl_ms});
+
+# --------------- Drift-visibility diagnostics (ADR-0009 §6) ---------------
+# Read-only entities exposing the identities the gateway COMPILED. Compare against
+# registry/map.json in git: a mismatch means "committed but not yet reflashed" — the static
+# map's failure mode — and shows on a dashboard instead of surfacing as a misbehaving button.
+# Published once from on_boot (constants); update_interval: never so they don't poll.
+text_sensor:
+  - platform: template
+    id: binding_manifest_hash
+    name: "Binding Manifest Hash"
+    entity_category: diagnostic
+    update_interval: never
+  - platform: template
+    id: node_map_version
+    name: "Node Map Version"
+    entity_category: diagnostic
+    update_interval: never
 
 interval:
   # Sweep pending ACKs; each expired event fires its (log-only) fallback exactly once.
