@@ -40,6 +40,8 @@ from pathlib import Path
 
 SCHEMA_VERSION = 1
 REQUIRED_KEYS = ("node_id", "button", "event", "relay", "op")
+# Buttons are the gesture index into the standard 8-button set (0-7, packages/base_node.yaml).
+BUTTON_MAX = 7
 # Minimal action vocabulary (ADR-0009 open item 1 — grows additively once the controller
 # board / relay channels are chosen, ADR-0003 open item 7).
 VALID_OPS = ("on", "off", "toggle")
@@ -149,6 +151,10 @@ def validate(parsed: dict, valid_node_ids: set) -> list:
         for k in ("node_id", "button", "relay"):
             if not isinstance(b[k], int):
                 errors.append(f"{where}: '{k}' must be an integer, got {b[k]!r}")
+        # A button outside the standard 8-button set (0-7) is a silently dead binding —
+        # no such gesture is ever emitted. Guard only when button parsed as an int.
+        if isinstance(b["button"], int) and not (0 <= b["button"] <= BUTTON_MAX):
+            errors.append(f"{where}: button {b['button']} out of range (valid: 0-{BUTTON_MAX})")
         if b["node_id"] not in valid_node_ids:
             errors.append(f"{where}: node_id {b['node_id']} is not in the registry (nodes.csv)")
         if b["op"] not in VALID_OPS:

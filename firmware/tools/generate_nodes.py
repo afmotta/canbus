@@ -316,6 +316,7 @@ def main():
     floor_groups = {}
     map_entries = []  # (node_id, room, board, location) -> compiled into the gateway's node_map.h
     export_nodes = []  # full rows (incl. floor + sensors) -> registry/map.json (ADR-0009 §7)
+    node_files = []  # (path, content, log) staged here, written only after the manifest validates
 
     with open(csv_path, newline="") as f:
         reader = csv.DictReader(f)
@@ -387,25 +388,31 @@ def main():
                 sensor_pkg=SENSOR_PKG if has_sensors else "",
             )
 
-            out_path = out_dir / f"{name}.yaml"
-            with open(out_path, "w") as yf:
-                yf.write(yaml_content)
-
+            sensor_note = "  +sensors" if has_sensors else ""
             floor_groups.setdefault(floor, []).append((node_id, room, board, location))
             map_entries.append((node_id, room, board, location))
             export_nodes.append({
                 "node_id": node_id, "floor": floor, "room": room, "board": board,
                 "location": location, "sensors": 1 if has_sensors else 0,
             })
-            sensor_note = "  +sensors" if has_sensors else ""
-            print(f"  ✓ {name}.yaml  Input=0x{input_id:08X}  node_id={node_id}  [{location}]{sensor_note}")
+            node_files.append((
+                out_dir / f"{name}.yaml", yaml_content,
+                f"  ✓ {name}.yaml  Input=0x{input_id:08X}  node_id={node_id}  [{location}]{sensor_note}",
+            ))
             count += 1
 
     # Binding-derived exports (ADR-0009 §4/§7): validate the manifest against the registry,
     # then emit bindings.h (hash + fallback table), map.json, and the generated HA package.
-    # Run first because the map_version it computes is also compiled into node_map.h (§6
-    # drift visibility) — and so an invalid manifest aborts before node_map.h is rewritten.
+    # Run FIRST, before any node artifact is written: write_exports aborts (sys.exit) on an
+    # invalid manifest, so validating here means a bad bindings.yaml never leaves nodes/ or
+    # node_map.h half-regenerated (validate-before-persist). It also yields map_version, which
+    # is compiled into node_map.h for §6 drift visibility.
     manifest_hash, map_version = write_exports(seen_node_ids, export_nodes, ROOT)
+
+    # Manifest validated — now persist the node artifacts.
+    for path, content, log in node_files:
+        path.write_text(content)
+        print(log)
 
     map_path = ROOT / "protocol" / "node_map.h"
     write_node_map(map_entries, map_version, map_path)

@@ -114,6 +114,36 @@ def test_generator_node_map_version_matches_map_json():
     assert f'NODE_MAP_VERSION[] = "{map_version}";' in header
 
 
+def test_generator_aborts_before_writing_node_files():
+    # validate-before-persist: an invalid bindings.yaml must abort the generator before any
+    # node artifact (nodes/*.yaml, node_map.h) is written, so a bad manifest can't leave the
+    # tree half-regenerated. Driven against a temp ROOT so the real registry is untouched.
+    saved_root = g.ROOT
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        for sub in ("registry", "protocol", "gateway"):
+            (root / sub).mkdir()
+        (root / "registry" / "nodes.csv").write_text(
+            "node_id,floor,room,board,location,sensors\n100,0,7,0,Hall,0\n"
+        )
+        # node_id 999 is not in nodes.csv -> manifest invalid -> generator aborts.
+        (root / "registry" / "bindings.yaml").write_text(
+            "schema_version: 1\nbindings:\n"
+            "  - node_id: 999\n    button: 0\n    event: single\n    relay: 0\n    op: toggle\n"
+        )
+        g.ROOT = root
+        try:
+            try:
+                g.main()
+                raise AssertionError("expected SystemExit on an invalid manifest")
+            except SystemExit as e:
+                assert e.code == 1
+            assert list((root / "nodes").glob("*.yaml")) == [], "node configs written before abort"
+            assert not (root / "protocol" / "node_map.h").exists(), "node_map.h written before abort"
+        finally:
+            g.ROOT = saved_root
+
+
 def test_ha_package_bakes_hash():
     p = g.render_ha_package(HASH)
     assert f'manifest_hash: "{HASH}"' in p

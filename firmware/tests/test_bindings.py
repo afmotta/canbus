@@ -132,6 +132,17 @@ bindings:
     assert any("missing" in e for e in bindings.validate(_parse(missing), NODE_IDS))
 
 
+def test_validation_button_out_of_range():
+    # button is the gesture index into the standard 8-button set (0-7). Outside that range
+    # is a silently dead binding (no such button exists), so reject it at validation.
+    too_high = bindings.validate(_parse(FORM_A.replace("button: 3", "button: 8")), NODE_IDS)
+    assert any("button" in e and "8" in e for e in too_high), too_high
+    negative = bindings.validate(_parse(FORM_A.replace("button: 0", "button: -1")), NODE_IDS)
+    assert any("button" in e for e in negative), negative
+    # An in-range button (0-7) stays valid.
+    assert bindings.validate(_parse(FORM_A.replace("button: 3", "button: 7")), NODE_IDS) == []
+
+
 def test_validation_bad_schema_version():
     assert any("schema_version" in e for e in bindings.validate(_parse("schema_version: 2\nbindings: []\n"), NODE_IDS))
 
