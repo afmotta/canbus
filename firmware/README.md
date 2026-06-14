@@ -214,8 +214,15 @@ system of record** (ADR-0009), so push registry changes promptly — bindings ar
   - `gateway/ha_manifest_package.yaml` — the HA readiness-heartbeat automation with the hash
     baked in, so HA echoes it automatically (no hand-paste). Wire it into HA once as a package.
 - **Workflow:** edit `bindings.yaml` → `python3 tools/generate_nodes.py` (validates every
-  binding against `nodes.csv`, prints the hash, regenerates all artifacts above) →
-  recompile/flash the gateway. No re-paste step: the HA package carries the hash.
+  binding against `nodes.csv`, prints the hash, regenerates all artifacts above) → commit and
+  **push** → `python3 tools/check_registry_pushed.py` → recompile/flash the gateway. No
+  re-paste step: the HA package carries the hash.
+- **Push-discipline gate (ADR-0009 §6 / open item 4):** `tools/check_registry_pushed.py` is
+  the mechanical pre-reflash check — it fails (non-zero) unless the registry (and the
+  generated artifacts compiled into the controller) is committed *and* `HEAD` is pushed to a
+  remote. ADR-0009 §6 makes the remote the backup; bindings are unrebuildable, so reflashing
+  a controller whose registry only exists locally is an unbacked-up house. Exit `0` = safe to
+  flash, `1` = gate failed, `2` = git error.
 - **Drift visibility (ADR-0009 §6):** the gateway exposes two read-only HA diagnostic
   `text_sensor`s — **Binding Manifest Hash** (`BINDINGS_MANIFEST_HASH`) and **Node Map
   Version** (`NODE_MAP_VERSION`, mirroring `map.json`'s `map_version`). Both are compile-time
