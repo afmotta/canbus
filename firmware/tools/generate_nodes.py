@@ -26,6 +26,8 @@ and a single include.
 """
 
 import csv
+import hashlib
+import json
 import sys
 from pathlib import Path
 
@@ -119,29 +121,138 @@ def write_node_map(entries, path: Path) -> None:
     )
 
 
-def write_bindings_header(manifest_hash: str, path: Path) -> None:
-    """Emit the controller's binding-manifest identity (ADR-0009 §3): the canonical hash of
-    bindings.yaml that ha_ready compares against the hash Home Assistant echoes (ADR-0003).
+def _digest(payload) -> str:
+    """Deterministic 16-hex content marker over a JSON-able payload (same family as the
+    binding canonical hash). Used as the map's version stamp instead of a wall-clock
+    timestamp, so an unchanged export regenerates byte-for-byte (Alberto's call, ADR-0009 §7:
+    the 'generation marker' is content identity, not time — no diff churn on every run)."""
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
-    Hash-only and deterministic — no generation timestamp — so regenerating with unchanged
-    bindings produces no diff. The compiled BINDINGS[] table and a generated-at stamp are a
-    deferred additive slice (ADR-0009 §4/§6).
+
+def render_bindings_header(manifest_hash: str, bindings_list) -> str:
+    """Render protocol/bindings.h: the binding-manifest identity (ADR-0009 §3) PLUS the full
+    compiled BINDINGS[] fallback table (ADR-0009 §4). Frozen-additive, mirrors node_map.h.
+
+    Deterministic — no generation timestamp — so regenerating unchanged bindings produces no
+    diff. The table is the controller's fallback-bindings artifact; it is committed now and
+    grows as bindings.yaml is authored (today it is empty: fallback is still log-only,
+    ADR-0003 open item 7). event/op are stored as C strings (like node_map.h names) — no new
+    enums — so the action vocabulary can grow additively without a header redesign.
     """
-    path.write_text(
-        "#pragma once\n\n"
+    ordered = sorted(bindings_list, key=lambda b: (b["node_id"], b["button"], str(b["event"])))
+    if ordered:
+        rows = "\n".join(
+            f'    {{{b["node_id"]}, {b["button"]}, "{_c_str(str(b["event"]))}", '
+            f'{b["relay"]}, "{_c_str(str(b["op"]))}"}},'
+            for b in ordered
+        )
+        table = (
+            f"inline constexpr BindingEntry BINDINGS[] = {{\n{rows}\n}};\n"
+            "inline constexpr std::size_t BINDINGS_SIZE = sizeof(BINDINGS) / sizeof(BINDINGS[0]);\n"
+        )
+    else:
+        # An empty manifest yields a 0-length table. A zero-size array is non-standard, so
+        # expose a null pointer + size 0 instead — binding_find() never dereferences it.
+        table = (
+            "inline constexpr const BindingEntry *BINDINGS = nullptr;\n"
+            "inline constexpr std::size_t BINDINGS_SIZE = 0;\n"
+        )
+    return (
+        "#pragma once\n"
+        "#include <cstdint>\n"
+        "#include <cstddef>\n"
+        "#include <cstring>\n\n"
         "// =============================================================================\n"
         "// bindings.h — GENERATED from registry/bindings.yaml by tools/generate_nodes.py. DO NOT EDIT.\n"
-        "// Binding-manifest identity for the ha_ready arbitration (ADR-0009 §3): the canonical\n"
-        "// hash of bindings.yaml, which the gateway compares against the hash Home Assistant\n"
-        "// echoes in its readiness heartbeat (ADR-0003). A mismatch keeps ha_ready off.\n"
+        "// Binding-manifest identity + compiled fallback table for the ha_ready arbitration\n"
+        "// (ADR-0009 §3/§4). BINDINGS_MANIFEST_HASH is the canonical hash of bindings.yaml,\n"
+        "// which the gateway compares against the hash Home Assistant echoes in its readiness\n"
+        "// heartbeat (ADR-0003); a mismatch keeps ha_ready off. BINDINGS[] is the controller's\n"
+        "// fallback action table — frozen-additive, currently log-only (ADR-0003 open item 7).\n"
         "// =============================================================================\n\n"
-        f'inline constexpr char BINDINGS_MANIFEST_HASH[] = "{manifest_hash}";\n'
+        f'inline constexpr char BINDINGS_MANIFEST_HASH[] = "{manifest_hash}";\n\n'
+        "struct BindingEntry { uint16_t node_id; uint8_t button; const char *event; "
+        "uint8_t relay; const char *op; };\n\n"
+        f"{table}\n"
+        "inline const BindingEntry *binding_find(uint16_t node_id, uint8_t button, const char *event) {\n"
+        "  for (std::size_t i = 0; i < BINDINGS_SIZE; i++)\n"
+        "    if (BINDINGS[i].node_id == node_id && BINDINGS[i].button == button &&\n"
+        "        std::strcmp(BINDINGS[i].event, event) == 0) return &BINDINGS[i];\n"
+        "  return nullptr;\n"
+        "}\n"
     )
 
 
-def write_bindings_manifest(seen_node_ids, root: Path) -> str:
-    """Validate registry/bindings.yaml against the registry and stamp its hash into bindings.h.
-    Returns the manifest hash. Aborts (sys.exit) on an invalid manifest, writing nothing."""
+def build_map_export(export_nodes, manifest_hash: str) -> dict:
+    """Build the registry/map.json payload (ADR-0009 §7): the read-only export for non-C
+    consumers (HVAC controller, dashboards, tooling). schema_version + a deterministic
+    map_version marker + the binding manifest_hash + the node list. Nodes are sorted by
+    node_id so the export is stable regardless of CSV row order.
+
+    NOTE (ADR-0009 open item 5): the node field shape is provisional — confirm against the
+    HVAC controller firmware before freezing. Repo vocabulary (node_id) is used over the
+    ADR's shorthand 'id' until then.
+    """
+    nodes = [
+        {
+            "node_id": n["node_id"],
+            "floor": n["floor"],
+            "room": n["room"],
+            "board": n["board"],
+            "location": n["location"],
+            "sensors": n["sensors"],
+        }
+        for n in sorted(export_nodes, key=lambda n: n["node_id"])
+    ]
+    body = {"schema_version": 1, "manifest_hash": manifest_hash, "nodes": nodes}
+    return {
+        "schema_version": 1,
+        "map_version": _digest(body),
+        "manifest_hash": manifest_hash,
+        "nodes": nodes,
+    }
+
+
+def render_ha_package(manifest_hash: str) -> str:
+    """Render gateway/ha_manifest_package.yaml (ADR-0009 §4): the GENERATED Home Assistant
+    half of the readiness heartbeat, with the manifest hash baked in so HA echoes it
+    automatically — retiring the interim hand-paste. Heartbeat only; the ACK automation
+    stays hand-maintained in ha_arbitration_automations.yaml until bindings are real and
+    manifest-derived (ADR-0009 open item 3, resolved this slice: heartbeat-only package)."""
+    return (
+        "# =============================================================================\n"
+        "# ha_manifest_package.yaml — GENERATED from registry/bindings.yaml by\n"
+        "# tools/generate_nodes.py. DO NOT EDIT — re-run the generator after editing bindings.\n"
+        "# =============================================================================\n"
+        "# Home Assistant package (NOT ESPHome config). It carries the readiness-heartbeat\n"
+        "# automation with the binding manifest hash baked in, so HA proves it runs the same\n"
+        "# bindings the gateway compiled (ADR-0009 §3/§4). Wire it into HA once, e.g.:\n"
+        "#   homeassistant:\n"
+        "#     packages:\n"
+        "#       canbus_manifest: !include ha_manifest_package.yaml\n"
+        "# Regenerating with unchanged bindings produces no diff. The ACK automation stays\n"
+        "# hand-maintained in ha_arbitration_automations.yaml (still log-only, ADR-0003).\n"
+        "# =============================================================================\n\n"
+        "automation:\n"
+        "  - id: canbus_gateway_readiness_heartbeat\n"
+        '    alias: "CAN gateway: readiness heartbeat"\n'
+        "    mode: single\n"
+        "    triggers:\n"
+        '      - trigger: time_pattern\n'
+        '        seconds: "/5"\n'
+        "    actions:\n"
+        "      - action: esphome.canbus_gateway_ha_readiness_heartbeat\n"
+        "        data:\n"
+        f'          manifest_hash: "{manifest_hash}"\n'
+    )
+
+
+def write_exports(seen_node_ids, export_nodes, root: Path) -> str:
+    """Validate registry/bindings.yaml against the registry, then emit every binding-derived
+    artifact from one source in one run (ADR-0009 §4/§7): bindings.h (hash + table), map.json
+    (read-only export), and ha_manifest_package.yaml (HA echoes the hash). Returns the
+    manifest hash. Aborts (sys.exit) on an invalid manifest, writing nothing."""
     bindings_path = root / "registry" / "bindings.yaml"
     if not bindings_path.exists():
         print(f"Creating empty {bindings_path} ...")
@@ -156,10 +267,22 @@ def write_bindings_manifest(seen_node_ids, root: Path) -> str:
         sys.exit(1)
 
     manifest_hash = bindings.canonical_hash(manifest)
+
     header_path = root / "protocol" / "bindings.h"
-    write_bindings_header(manifest_hash, header_path)
+    header_path.write_text(render_bindings_header(manifest_hash, manifest["bindings"]))
     print(f"  ✓ {header_path.name}  (binding manifest hash {manifest_hash}, "
           f"{len(manifest['bindings'])} binding(s))")
+
+    map_export = build_map_export(export_nodes, manifest_hash)
+    map_path = root / "registry" / "map.json"
+    map_path.write_text(json.dumps(map_export, indent=2) + "\n")
+    print(f"  ✓ {map_path.name}  (read-only export, map_version {map_export['map_version']}, "
+          f"{len(map_export['nodes'])} node(s))")
+
+    ha_path = root / "gateway" / "ha_manifest_package.yaml"
+    ha_path.write_text(render_ha_package(manifest_hash))
+    print(f"  ✓ {ha_path.name}  (HA readiness heartbeat echoes the hash automatically)")
+
     return manifest_hash
 
 
@@ -181,6 +304,7 @@ def main():
     count = 0
     floor_groups = {}
     map_entries = []  # (node_id, room, board, location) -> compiled into the gateway's node_map.h
+    export_nodes = []  # full rows (incl. floor + sensors) -> registry/map.json (ADR-0009 §7)
 
     with open(csv_path, newline="") as f:
         reader = csv.DictReader(f)
@@ -258,6 +382,10 @@ def main():
 
             floor_groups.setdefault(floor, []).append((node_id, room, board, location))
             map_entries.append((node_id, room, board, location))
+            export_nodes.append({
+                "node_id": node_id, "floor": floor, "room": room, "board": board,
+                "location": location, "sensors": 1 if has_sensors else 0,
+            })
             sensor_note = "  +sensors" if has_sensors else ""
             print(f"  ✓ {name}.yaml  Input=0x{input_id:08X}  node_id={node_id}  [{location}]{sensor_note}")
             count += 1
@@ -266,12 +394,13 @@ def main():
     write_node_map(map_entries, map_path)
     print(f"  ✓ {map_path.name}  (central node_id -> room/board/name map, compiled into the gateway)")
 
-    # Binding manifest (ADR-0009): validate against the registry, hash, stamp into bindings.h.
-    manifest_hash = write_bindings_manifest(seen_node_ids, ROOT)
+    # Binding-derived exports (ADR-0009 §4/§7): validate the manifest against the registry,
+    # then emit bindings.h (hash + fallback table), map.json, and the generated HA package.
+    manifest_hash = write_exports(seen_node_ids, export_nodes, ROOT)
 
     print(f"\nGenerated {count} node configs in {out_dir}/")
     print(f"Binding manifest hash: {manifest_hash}  "
-          f"(paste into HA readiness heartbeat — firmware/gateway/ha_arbitration_automations.yaml)")
+          f"(HA echoes it automatically via gateway/ha_manifest_package.yaml)")
     print("\n── CAN ID Map (Input id) ──")
     for floor in sorted(floor_groups):
         label = FLOOR_LABELS.get(floor, f"Floor {floor}")

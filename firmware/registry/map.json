@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "map_version": "08ba65f1e2523065",
+  "manifest_hash": "d66767448ba37b2f",
+  "nodes": [
+    {
+      "node_id": 100,
+      "floor": 0,
+      "room": 7,
+      "board": 0,
+      "location": "Ground floor hallway",
+      "sensors": 0
+    },
+    {
+      "node_id": 101,
+      "floor": 0,
+      "room": 8,
+      "board": 0,
+      "location": "Ground floor living room",
+      "sensors": 0
+    }
+  ]
+}

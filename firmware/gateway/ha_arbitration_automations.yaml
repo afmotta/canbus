@@ -1,43 +1,26 @@
 # =============================================================================
 # ha_arbitration_automations.yaml — Home Assistant half of the ADR-0003 prototype
 # =============================================================================
-# This is HOME ASSISTANT configuration, not ESPHome config. Copy these automations
-# into HA (automations.yaml include, or recreate them in the UI). They pair with
-# the gateway's ha_readiness_heartbeat / ha_ack_event API services (gateway.yaml).
+# This is HOME ASSISTANT configuration, not ESPHome config. Copy this automation
+# into HA (automations.yaml include, or recreate it in the UI). It pairs with the
+# gateway's ha_ack_event API service (gateway.yaml).
 #
-# - The heartbeat proves HA is alive AND running the same binding manifest: the
-#   manifest_hash below must match the gateway's compiled BINDINGS_MANIFEST_HASH
-#   (protocol/bindings.h, ADR-0009 §3). INTERIM: paste the hash printed by
-#   tools/generate_nodes.py here whenever registry/bindings.yaml changes — until the
-#   generated HA package (ADR-0009 §4, deferred) automates this. Stop this automation
-#   (or change the hash) to watch the gateway's "HA Ready" sensor drop and button
-#   presses log FALLBACK instead of firing events — that is the ADR-0003 degraded
-#   path, exercisable from the couch.
-# - The ACK automation answers every forwarded button event within the gateway's
-#   ack_timeout_ms. In the target architecture it is generated from the binding
-#   manifest and ACKs only after applying the bound action; here it ACKs
+# - The readiness HEARTBEAT automation no longer lives here: it is GENERATED, with the
+#   binding-manifest hash baked in, into gateway/ha_manifest_package.yaml by
+#   tools/generate_nodes.py (ADR-0009 §4). Wire that package into HA once; the hash
+#   then tracks registry/bindings.yaml automatically — no more hand-paste. Stop that
+#   generated automation (or corrupt its hash) to watch the gateway's "HA Ready" sensor
+#   drop and button presses log FALLBACK instead of firing events — the ADR-0003
+#   degraded path, exercisable from the couch.
+# - The ACK automation below answers every forwarded button event within the gateway's
+#   ack_timeout_ms. It is hand-maintained (not manifest-derived) because the bound action
+#   is still log-only (ADR-0003 open item 7): in the target architecture it is generated
+#   from the binding manifest and ACKs only after applying the bound action; here it ACKs
 #   unconditionally, which is enough to exercise the timeout machinery.
 #
 # Service names are esphome.<device>_<service> — device "canbus-gateway" becomes
 # canbus_gateway.
 # =============================================================================
-
-- id: canbus_gateway_readiness_heartbeat
-  alias: "CAN gateway: readiness heartbeat"
-  description: >-
-    Tells the CAN gateway every 5s that HA is up and which binding-manifest hash it
-    carries. The gateway's TTL (ha_heartbeat_ttl_ms, default 15s) tolerates two
-    missed beats.
-  mode: single
-  triggers:
-    - trigger: time_pattern
-      seconds: "/5"
-  actions:
-    - action: esphome.canbus_gateway_ha_readiness_heartbeat
-      data:
-        # Must equal the gateway's compiled BINDINGS_MANIFEST_HASH (protocol/bindings.h).
-        # Regenerate + re-paste from tools/generate_nodes.py when bindings.yaml changes.
-        manifest_hash: "d66767448ba37b2f"
 
 - id: canbus_gateway_ack_button_events
   alias: "CAN gateway: ACK forwarded button events"

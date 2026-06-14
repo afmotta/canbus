@@ -1,0 +1,25 @@
+# =============================================================================
+# ha_manifest_package.yaml — GENERATED from registry/bindings.yaml by
+# tools/generate_nodes.py. DO NOT EDIT — re-run the generator after editing bindings.
+# =============================================================================
+# Home Assistant package (NOT ESPHome config). It carries the readiness-heartbeat
+# automation with the binding manifest hash baked in, so HA proves it runs the same
+# bindings the gateway compiled (ADR-0009 §3/§4). Wire it into HA once, e.g.:
+#   homeassistant:
+#     packages:
+#       canbus_manifest: !include ha_manifest_package.yaml
+# Regenerating with unchanged bindings produces no diff. The ACK automation stays
+# hand-maintained in ha_arbitration_automations.yaml (still log-only, ADR-0003).
+# =============================================================================
+
+automation:
+  - id: canbus_gateway_readiness_heartbeat
+    alias: "CAN gateway: readiness heartbeat"
+    mode: single
+    triggers:
+      - trigger: time_pattern
+        seconds: "/5"
+    actions:
+      - action: esphome.canbus_gateway_ha_readiness_heartbeat
+        data:
+          manifest_hash: "d66767448ba37b2f"
