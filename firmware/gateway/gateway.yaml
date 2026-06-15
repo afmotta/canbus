@@ -50,7 +50,6 @@ esp32:
 
 # --------------- Logging ---------------
 logger:
-  baud_rate: 0
   level: DEBUG
 
 # --------------- Network: WiFi ---------------
