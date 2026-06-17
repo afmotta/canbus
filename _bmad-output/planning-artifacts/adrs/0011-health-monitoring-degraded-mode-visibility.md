@@ -1,8 +1,9 @@
 ---
 adr: 0011
 title: 'Health monitoring & degraded-mode visibility: gateway-resident aliveness, edge events to HA, layered alerting'
-status: 'Proposed'
+status: 'Accepted'
 date: '2026-06-11'
+acceptedDate: '2026-06-16'
 deciders: ['Alberto']
 author: 'Winston (System Architect)'
 dependsOn:
@@ -23,13 +24,24 @@ relatedDocuments:
 
 ## Status
 
-**Proposed.** Closes the oldest deferred item in the project ("node health dashboard and
-aliveness alerting" — deferred in architecture.md on 2026-05-31 and unowned since), now
-broadened by what shipped in between: bridges that heartbeat with a latched overflow flag
-(ADR-0005), an `ha_ready` arbitration whose fallback mode is invisible outside the logs
-(ADR-0003), and ADR-0010's hand-off of unknown-node/vanished-node/storm as **security**
-signals. The raw signals all exist; this ADR decides who watches them, where aliveness
-state lives, and how degraded operation reaches a human.
+**Accepted (2026-06-16) — aliveness slice implemented.** Closes the oldest deferred item in
+the project ("node health dashboard and aliveness alerting" — deferred in architecture.md on
+2026-05-31 and unowned since), now broadened by what shipped in between: bridges that
+heartbeat with a latched overflow flag (ADR-0005), an `ha_ready` arbitration whose fallback
+mode is invisible outside the logs (ADR-0003), and ADR-0010's hand-off of
+unknown-node/vanished-node/storm as **security** signals. The raw signals all exist; this ADR
+decides who watches them, where aliveness state lives, and how degraded operation reaches a
+human. The stance is ratified: aliveness lives on the gateway, HA gets edges and aggregates
+rather than streams, every layer is watched by the layer above it (nodes ← gateway ← HA ←
+human), and one staleness doctrine (3× cadence = 90 s, shared with ADR-0006) governs nodes,
+bridges, and sensor readings alike. **Open item 1 — the aliveness slice — is implemented**:
+`protocol/node_health.h` (pure-logic per-node watch state + edge detection, natively tested in
+`tests/test_node_health.cpp`) wired into the gateway's `CAT_STATUS` handler, firing the edge
+events (`canbus_node_lost` / `_recovered` / `_error`) and publishing the aggregate entities
+(`nodes_online` / `nodes_total` / `fallback_events_count` / `nodes_missing`, alongside the
+existing `ha_ready`). The remaining open items (2 generated HA package, 3 bus-error counters,
+4 Story 5.1 storm routing, 5 `segment` column, 6 threshold tuning) are deferred to their named
+owners.
 
 ## Context
 
@@ -175,8 +187,10 @@ security monitoring exists or is built.
 
 ## Open items
 
-1. **Implement the aliveness slice**: `node_health.h` pure logic + gateway integration
-   (edge events, aggregate entities), native tests, thresholds as substitutions.
+1. ~~**Implement the aliveness slice**: `node_health.h` pure logic + gateway integration
+   (edge events, aggregate entities), native tests, thresholds as substitutions.~~
+   **Implemented 2026-06-16** (`protocol/node_health.h`, `tests/test_node_health.cpp`,
+   `firmware/gateway/gateway.yaml`; `node_lost_timeout_ms` substitution).
 2. **Generated HA package**: per-node status entities from edge events + `map.json`,
    the three alert classes, the reconnect report automation — lands with/after the
    ADR-0009 generator extension (same artifact family).

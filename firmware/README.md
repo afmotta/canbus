@@ -187,6 +187,25 @@ placeholder.
 - Pure logic lives in `protocol/ha_arbitration.h`; native test:
   `g++ -std=c++17 -Wall -Wextra firmware/tests/test_ha_arbitration.cpp -o /tmp/arb && /tmp/arb`
 
+### Health monitoring (ADR-0011)
+
+The gateway watches the **mapped** fleet and surfaces degraded operation to HA. Aliveness lives
+on the gateway because only it knows the expected fleet (the compiled map) and hears every
+heartbeat; HA cannot notice the silence of a device it has never heard from.
+
+- **One staleness doctrine:** a node is **lost** after 3 missed 30 s heartbeats (90 s,
+  `node_lost_timeout_ms`) — the same 3× cadence as ADR-0006 sensor staleness, not a second rule.
+- **Edge events to HA** (transition only, never a per-heartbeat stream): `esphome.canbus_node_lost`,
+  `canbus_node_recovered`, `canbus_node_error` (carries the changed `error_flags`), alongside the
+  existing `canbus_node_unknown`.
+- **Aggregate entities** (diagnostic, re-published every 5 s so they survive an HA disconnect):
+  **Nodes Online**, **Nodes Total**, **Fallback Events** (count of ha-not-ready + ack-timeout
+  fallbacks — a degraded night made visible), **Nodes Missing** (names from the map), plus the
+  existing **HA Ready**. ~6 entities regardless of fleet size — per-node entities are materialized
+  HA-side from the edge events by the generated package (ADR-0011 open item 2, deferred).
+- Pure logic lives in `protocol/node_health.h` (no ESPHome deps, like `ha_arbitration.h`); native test:
+  `g++ -std=c++17 -Wall -Wextra firmware/tests/test_node_health.cpp -o /tmp/health && /tmp/health`
+
 ---
 
 ## Binding Manifest (ADR-0009)

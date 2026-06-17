@@ -7,6 +7,16 @@ wire-spec call), or actionable now. Not bugs.
 
 ---
 
+## Deferred from: ADR-0011 acceptance + aliveness slice (2026-06-16)
+
+ADR-0011 (health monitoring & degraded-mode visibility) was accepted and its **open item 1 — the aliveness slice — is implemented** (`protocol/node_health.h` pure logic + native test, gateway edge events + aggregate entities). These remaining open items are deferred to their named owners. With this ADR's three-class alerting taxonomy now ratified (§4), it also unblocks ADR-0010's open item 4 (security-signal alerting), tracked below.
+
+- **Generated HA package (ADR-0011 open item 2)** [_blocked_ on the ADR-0009 generator extension] — the per-node status entities (materialized HA-side from the edge events + `map.json`), the three alert-class automations (§4), and the reconnect "degraded last night" report automation (§3). Lands with/after the ADR-0009 generator that already builds the HA-side package (same artifact family); the gateway fires the edge events + aggregates now, HA consumes them when this ships.
+- **Story 5.1 storm routing into the Security class (ADR-0011 open item 4 / ADR-0010 open item 4)** [_blocked_ on Story 5.1 (ready-for-dev, queued after Epic 4)] — when 5.1's `canbus_command_failed` / frame-storm fault surfacing lands, route its fault event into the **Security** alert class (immediate notification), not Maintenance — it predates the §4 class taxonomy. This is the concrete mechanism ADR-0010 open item 4 was waiting on.
+- **TWAI/MCP2515 bus-error counters (ADR-0011 open item 3)** [_bench/hardware_ — not load-bearing] — investigate what ESPHome's `esp32_can` exposes for bus error counters; would enrich the Maintenance class but the heartbeat error_flags already carry the actionable signal.
+- **`segment` column + segment-aware loss grouping (ADR-0011 open item 5 / §5)** [_blocked_ on the physical-topology ADR, queue #2 — post-tubes] — add a `segment` column to `nodes.csv` (additively, per ADR-0009's migration pattern) so "bridge + its N nodes lost" alerts as one segment fault, not N+1 alarms. Cannot be filled until the physical topology exists; the per-node alarm storm is the accepted PoC interim.
+- **Threshold tuning pass (ADR-0011 open item 6)** [_bench/hardware_] — tune `node_lost_timeout_ms` (and the alert-class escalation thresholds) on the bench/real deployment, in the same empirical session as the ADR-0003 arbitration timeouts (`ha_heartbeat_ttl_ms`, `ack_timeout_ms`).
+
 ## Deferred from: ADR-0010 acceptance + implementation (2026-06-16)
 
 ADR-0010 (security posture — physical envelope as the trust boundary, no bus cryptography, four consequence-limiting invariants) was accepted and its one mandated code change shipped (gateway OTA password, §5 / open item 1), plus the standing no-security-critical-actuation constraint registered in `project-context.md` (open item 5). These remaining open items are deferred to their named owners.

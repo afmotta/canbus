@@ -160,6 +160,7 @@ _Critical rules and patterns for implementing code in this project. Focus on uno
 - `MSG_BUTTON_EVENT` and `MSG_HEARTBEAT` both equal `0x01` — they are distinguished by the CAN ID category (CAT_INPUT vs CAT_STATUS), not the message type byte alone.
 - Node ID `0` is valid — it is not a null/unset sentinel. Node IDs start at 0.
 - The `debounce_ms` substitution applies to both `delayed_on` and `delayed_off` GPIO filters — it is not the same as `on_multi_click` timing thresholds, which are hardcoded in `button.yaml` (exception: the hold recognition threshold is the `hold_ms` substitution, default 800, ADR-0012 — fleet-wide it is also the derived long-press threshold).
+- **Aliveness lives on the gateway in `protocol/node_health.h`** (pure logic, natively tested like `ha_arbitration.h`) — there is ONE staleness doctrine (3× heartbeat cadence = 90 s, `node_lost_timeout_ms`, shared with ADR-0006's sensor-staleness rule, ADR-0011 §1). Do not add a second staleness rule for nodes/bridges. Watch state is RAM-only and tracked for **mapped** nodes only. The gateway forwards aliveness to HA as **edge events** (`esphome.canbus_node_lost` / `canbus_node_recovered` / `canbus_node_error`) plus **aggregate entities** (`nodes_online` / `nodes_total` / `fallback_events_count` / `nodes_missing`) — never a per-heartbeat stream and never per-node entities on the ESP32 (ADR-0011 §2). Like every other gateway event, the new `canbus_node_*` data fields are strings.
 
 ---
 

@@ -2,7 +2,8 @@
 title: 'Accept ADR-0011 (health monitoring) + gateway aliveness slice (open item 1)'
 type: 'feature'
 created: '2026-06-16'
-status: 'draft'
+status: 'done'
+baseline_commit: 'a983ab15a06ec0470251ff3514aa12615824b8d4'
 context:
   - '{project-root}/_bmad-output/project-context.md'
   - '{project-root}/_bmad-output/planning-artifacts/adrs/0011-health-monitoring-degraded-mode-visibility.md'
@@ -57,13 +58,13 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `firmware/protocol/node_health.h` -- NEW: `struct NodeHealth {uint32_t last_seen_ms; bool seen; bool lost; uint8_t error_flags;}`, `HEALTH_EDGE_RECOVERED/ERROR` bitflags, `health_on_heartbeat()` (returns edge mask, latches seen/last_seen/flags), `health_check_lost()` (once-only `seen&&!lost`→`lost` past `timeout_ms`), `health_is_missing()`, `health_nodes_online()`, `node_health_index()` (via `node_map_find`), `node_health_store()` (static array sized by `NODE_MAP_SIZE`). Wraparound-safe unsigned math, no ESPHome includes -- the natively-testable aliveness core (ADR-0011 §1).
-- [ ] `firmware/gateway/gateway.yaml` -- include `node_health.h`; add `node_lost_timeout_ms: "90000"` substitution + `fallback_events` global; in the `CAT_STATUS` handler call `health_on_heartbeat` for mapped nodes and fire `esphome.canbus_node_recovered` / `esphome.canbus_node_error`; add a 5 s sweep `interval` firing `esphome.canbus_node_lost` on transitions and publishing `nodes_online` / `fallback_events_count` / `nodes_missing`; publish constant `nodes_total` at `on_boot`; declare the four template sensors; increment `fallback_events` at both existing fallback log points -- wires the slice to HA as edges + aggregates (ADR-0011 §2–§4).
-- [ ] `firmware/tests/test_node_health.cpp` -- NEW native test covering every I/O Matrix row (first-clean/first-error, lost-once + idempotent, recovered, error-change incl. clear-to-0, online/missing counts, `node_health_index` mapped/unmapped, wraparound) -- proves the pure logic.
-- [ ] `firmware/README.md` -- add the `g++ ... test_node_health.cpp` one-liner alongside the other native tests + a short bullet on the new aliveness entities/events.
-- [ ] `_bmad-output/planning-artifacts/adrs/0011-health-monitoring-degraded-mode-visibility.md` -- flip frontmatter to `Accepted` + `acceptedDate: '2026-06-16'`, rewrite Status to the `**Accepted (2026-06-16).**` form (preserve substance + watch hierarchy + staleness doctrine), mark open item 1 implemented and 2–6 deferred.
-- [ ] `_bmad-output/project-context.md` -- add one Critical-rules bullet: aliveness lives in `node_health.h` (one staleness doctrine, 3× cadence, 90 s) and the new `canbus_node_lost/recovered/error` event data fields are strings.
-- [ ] `_bmad-output/implementation-artifacts/deferred-work.md` -- append a "Deferred from: ADR-0011 acceptance + aliveness slice (2026-06-16)" section logging open items 2 (generated HA package → ADR-0009 generator), 3 (bus-error counters → not load-bearing), 4 (Story 5.1 storm → security class), 5 (`segment` column → physical-topology ADR), 6 (threshold tuning → bench session); note item 1 resolved here.
+- [x] `firmware/protocol/node_health.h` -- NEW: `struct NodeHealth {uint32_t last_seen_ms; bool seen; bool lost; uint8_t error_flags;}`, `HEALTH_EDGE_RECOVERED/ERROR` bitflags, `health_on_heartbeat()` (returns edge mask, latches seen/last_seen/flags), `health_check_lost()` (once-only `seen&&!lost`→`lost` past `timeout_ms`), `health_is_missing()`, `health_nodes_online()`, `node_health_index()` (via `node_map_find`), `node_health_store()` (static array sized by `NODE_MAP_SIZE`). Wraparound-safe unsigned math, no ESPHome includes -- the natively-testable aliveness core (ADR-0011 §1).
+- [x] `firmware/gateway/gateway.yaml` -- include `node_health.h`; add `node_lost_timeout_ms: "90000"` substitution + `fallback_events` global; in the `CAT_STATUS` handler call `health_on_heartbeat` for mapped nodes and fire `esphome.canbus_node_recovered` / `esphome.canbus_node_error`; add a 5 s sweep `interval` firing `esphome.canbus_node_lost` on transitions and publishing `nodes_online` / `fallback_events_count` / `nodes_missing`; publish constant `nodes_total` at `on_boot`; declare the four template sensors; increment `fallback_events` at both existing fallback log points -- wires the slice to HA as edges + aggregates (ADR-0011 §2–§4).
+- [x] `firmware/tests/test_node_health.cpp` -- NEW native test covering every I/O Matrix row (first-clean/first-error, lost-once + idempotent, recovered, error-change incl. clear-to-0, online/missing counts, `node_health_index` mapped/unmapped, wraparound) -- proves the pure logic.
+- [x] `firmware/README.md` -- add the `g++ ... test_node_health.cpp` one-liner alongside the other native tests + a short bullet on the new aliveness entities/events.
+- [x] `_bmad-output/planning-artifacts/adrs/0011-health-monitoring-degraded-mode-visibility.md` -- flip frontmatter to `Accepted` + `acceptedDate: '2026-06-16'`, rewrite Status to the `**Accepted (2026-06-16).**` form (preserve substance + watch hierarchy + staleness doctrine), mark open item 1 implemented and 2–6 deferred.
+- [x] `_bmad-output/project-context.md` -- add one Critical-rules bullet: aliveness lives in `node_health.h` (one staleness doctrine, 3× cadence, 90 s) and the new `canbus_node_lost/recovered/error` event data fields are strings.
+- [x] `_bmad-output/implementation-artifacts/deferred-work.md` -- append a "Deferred from: ADR-0011 acceptance + aliveness slice (2026-06-16)" section logging open items 2 (generated HA package → ADR-0009 generator), 3 (bus-error counters → not load-bearing), 4 (Story 5.1 storm → security class), 5 (`segment` column → physical-topology ADR), 6 (threshold tuning → bench session); note item 1 resolved here.
 
 **Acceptance Criteria:**
 - Given ADR-0011 is the health-monitoring record, when frontmatter/Status are reviewed, then it is `Accepted` with `acceptedDate: '2026-06-16'`, reads as ratified (substance + watch hierarchy + one-staleness-doctrine preserved), open item 1 marked implemented, 2–6 marked deferred.
@@ -100,3 +101,39 @@ health_on_heartbeat(h, 230000, ERR_CAN_BUS_OFF);  // -> HEALTH_EDGE_ERROR (flags
 
 **Manual checks (if no CLI):**
 - If `esphome` is unavailable: confirm `gateway.yaml` includes `../protocol/node_health.h`, the `CAT_STATUS` handler calls `health_on_heartbeat` for mapped nodes, the sweep `interval` fires `esphome.canbus_node_lost`, and the four template sensors (`nodes_online`, `nodes_total`, `fallback_events_count`, `nodes_missing`) are declared.
+
+## Suggested Review Order
+
+**The decision (start here)**
+
+- ADR ratified: aliveness on the gateway, edges + aggregates, one staleness doctrine; open item 1 marked implemented, 2–6 deferred.
+  [`0011-...md:25`](../planning-artifacts/adrs/0011-health-monitoring-degraded-mode-visibility.md#L25)
+
+**The aliveness core (pure logic)**
+
+- The watch-state struct + how loss/recovery/error are modelled — the design intent in one type.
+  [`node_health.h:25`](../../firmware/protocol/node_health.h#L25)
+- The key correctness rule: RECOVERED fires only for an *announced* loss, so edges stay paired (no orphan recovered, no dropped lost).
+  [`node_health.h:50`](../../firmware/protocol/node_health.h#L50)
+- The once-only silence transition (wraparound-safe, never seen → never "lost").
+  [`node_health.h:68`](../../firmware/protocol/node_health.h#L68)
+- One declarative `node_lost` per sweep tick without dropping simultaneous losses.
+  [`node_health.h:97`](../../firmware/protocol/node_health.h#L97)
+
+**Gateway wiring (the header/YAML seam)**
+
+- Heartbeat handler fires `node_recovered` / `node_error` edges for mapped nodes (staged via a global, x in scope for re-decode).
+  [`gateway.yaml:368`](../../firmware/gateway/gateway.yaml#L368)
+- Sweep interval: `node_lost` edge + re-publish the aggregates (survives the HA blind window).
+  [`gateway.yaml:248`](../../firmware/gateway/gateway.yaml#L248)
+- The ~6 aggregate entities — fleet-size-independent, no per-node ESP32 entities.
+  [`gateway.yaml:212`](../../firmware/gateway/gateway.yaml#L212)
+- Threshold as a tunable substitution (ADR open item 6).
+  [`gateway.yaml:26`](../../firmware/gateway/gateway.yaml#L26)
+
+**Supporting (tests + tracking)**
+
+- Native test, incl. the orphan-prevention + combined-edge cases the review added.
+  [`test_node_health.cpp:38`](../../firmware/tests/test_node_health.cpp#L38)
+- Open items 2–6 logged with owners.
+  [`deferred-work.md:10`](deferred-work.md#L10)

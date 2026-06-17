@@ -21,6 +21,9 @@ substitutions:
   # Tunable on hardware to resolve ADR-0003 open item 2 (values are milliseconds).
   ha_heartbeat_ttl_ms: "15000"
   ack_timeout_ms: "500"
+  # Aliveness: a mapped node is LOST after 3 missed 30 s heartbeats (ADR-0011 §1, the same
+  # 3x-cadence staleness doctrine as ADR-0006). Tunable on the bench (ADR-0011 open item 6).
+  node_lost_timeout_ms: "90000"
 
 esphome:
   name: canbus-gateway
@@ -36,10 +39,15 @@ esphome:
       - text_sensor.template.publish:
           id: node_map_version
           state: !lambda 'return std::string(NODE_MAP_VERSION);'
+      # nodes_total is the compiled fleet size — a constant, published once (ADR-0011 §2).
+      - sensor.template.publish:
+          id: nodes_total_sensor
+          state: !lambda 'return (float) NODE_MAP_SIZE;'
   includes:
     - ../protocol/canbus_protocol.h
     - ../protocol/node_map.h   # GENERATED central node_id -> room/board/name map (ADR-0007)
     - ../protocol/ha_arbitration.h   # ha_ready + pending-ACK pure logic (ADR-0003)
+    - ../protocol/node_health.h   # gateway-resident aliveness pure logic (ADR-0011 §1)
     - ../protocol/bindings.h   # GENERATED binding-manifest hash (ADR-0009 §3)
 
 esp32:
@@ -145,6 +153,19 @@ globals:
     initial_value: '1'
   # The pending-ACK list lives in ha_arbitration.h (pending_acks_store()) — ESPHome
   # globals cannot carry a custom struct type (storage is declared before user includes).
+  # --------------- Aliveness state (ADR-0011) ---------------
+  # Count of fallback firings (ha-not-ready + ack-timeout), surfaced as an aggregate so a
+  # degraded night is visible on reconnect (ADR-0011 §3). The per-node watch state lives in
+  # node_health.h (node_health_store()) — a custom struct, same reason as the pending-ACK list.
+  - id: fallback_events
+    type: uint32_t
+    initial_value: '0'
+  - id: health_edges   # edge bitmask staged by the heartbeat handler for the if-blocks below
+    type: uint8_t
+    initial_value: '0'
+  - id: lost_node_idx  # store index staged by the sweep for the declarative node_lost event (-1 = none)
+    type: int
+    initial_value: '-1'
 
 binary_sensor:
   - platform: template
@@ -173,6 +194,38 @@ text_sensor:
     name: "Node Map Version"
     entity_category: diagnostic
     update_interval: never
+  # Aliveness aggregate (ADR-0011 §2): names of mapped nodes not currently heard (never seen
+  # or lost). Published by the sweep; survives the HA blind window like the diagnostics above.
+  - platform: template
+    id: nodes_missing_sensor
+    name: "Nodes Missing"
+    entity_category: diagnostic
+    update_interval: never
+
+# --------------- Aliveness aggregates (ADR-0011 §2) ---------------
+# Fleet-level counts (NOT per-node entities — the ESP32 carries ~6 aggregates regardless of
+# fleet size; per-node entities are materialized HA-side from the edge events, open item 2).
+# No lambda + update_interval never: published explicitly (nodes_total at boot, the rest by
+# the sweep), so they never poll and re-publish on reconnect.
+sensor:
+  - platform: template
+    id: nodes_online_sensor
+    name: "Nodes Online"
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: template
+    id: nodes_total_sensor
+    name: "Nodes Total"
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: template
+    id: fallback_events_sensor
+    name: "Fallback Events"
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: never
 
 interval:
   # Sweep pending ACKs; each expired event fires its (log-only) fallback exactly once.
@@ -185,11 +238,44 @@ interval:
           const auto expired = pending_expire(pending_acks_store(), now);
           for (const auto &e : expired) {
             expired_record(expired_ring_store(), e.event_id, e.deadline_ms);
+            id(fallback_events)++;   // degraded-mode visibility aggregate (ADR-0011 §3)
             ESP_LOGW("arb", "FALLBACK (ack timeout): node=%u btn=%u %s event_id=%u waited=%ums",
                      (unsigned) e.node_id, (unsigned) e.button,
                      event_type_str(e.event_type).c_str(), (unsigned) e.event_id,
                      (unsigned) (now - (e.deadline_ms - ${ack_timeout_ms})));
           }
+
+  # Aliveness sweep (ADR-0011 §1-2): detect the silence transition per mapped node, fire one
+  # canbus_node_lost edge per tick (the announce queue spreads simultaneous losses over ticks,
+  # dropping none), and refresh the fleet aggregates. Entities — not a stream — so they
+  # re-publish on HA reconnect and survive the degraded "blind window" by construction.
+  - interval: 5s
+    then:
+      - lambda: |-
+          const uint32_t now = millis();
+          NodeHealth *hs = node_health_store();
+          for (std::size_t i = 0; i < NODE_MAP_SIZE; i++)
+            health_check_lost(hs[i], now, ${node_lost_timeout_ms});
+          id(nodes_online_sensor).publish_state((float) health_nodes_online(hs, NODE_MAP_SIZE));
+          id(fallback_events_sensor).publish_state((float) id(fallback_events));
+          std::string missing;
+          for (std::size_t i = 0; i < NODE_MAP_SIZE; i++) {
+            if (health_is_missing(hs[i])) {
+              if (!missing.empty()) missing += ", ";
+              missing += NODE_MAP[i].name;
+            }
+          }
+          id(nodes_missing_sensor).publish_state(missing);
+          id(lost_node_idx) = health_take_unannounced_lost(hs, NODE_MAP_SIZE);
+      - if:
+          condition:
+            lambda: 'return id(lost_node_idx) >= 0;'
+          then:
+            - homeassistant.event:
+                event: esphome.canbus_node_lost
+                data:
+                  node_id: !lambda 'return to_string(NODE_MAP[id(lost_node_idx)].node_id);'
+                  name: !lambda 'return std::string(NODE_MAP[id(lost_node_idx)].name);'
 
 # --------------- CAN Bus (native ESP32 TWAI) ---------------
 canbus:
@@ -253,6 +339,7 @@ canbus:
                             - lambda: 'id(next_event_id)++;'
                           else:
                             - lambda: |-
+                                id(fallback_events)++;   // degraded-mode visibility aggregate (ADR-0011 §3)
                                 ESP_LOGW("arb", "FALLBACK (ha not ready): node=%u btn=%u %s",
                                          (unsigned) can_id_node(can_id), (unsigned) payload_button_index(x),
                                          event_type_str(payload_event_type(x)).c_str());
@@ -278,6 +365,38 @@ canbus:
                       ESP_LOGD("gw", "Heartbeat node=%u (%s) uptime=%uh error=0x%02X",
                                node, name, (unsigned) uptime, (unsigned) errors);
                     }
+                # Aliveness (ADR-0011 §1-2): a heartbeat from a MAPPED node refreshes its
+                # last_seen and yields the edge events to forward. Edges are staged into a
+                # global so the if-blocks below can fire the (declarative) HA events; the
+                # node_lost edge is absence-detected by the sweep interval, not here.
+                - lambda: |-
+                    const int hi = node_health_index(can_id_node(can_id));
+                    id(health_edges) = (hi >= 0)
+                        ? health_on_heartbeat(node_health_store()[hi], millis(), payload_errors(x))
+                        : HEALTH_EDGE_NONE;
+                - if:
+                    condition:
+                      lambda: 'return (id(health_edges) & HEALTH_EDGE_RECOVERED) != 0;'
+                    then:
+                      - homeassistant.event:
+                          event: esphome.canbus_node_recovered
+                          data:
+                            node_id: !lambda 'return to_string(can_id_node(can_id));'
+                            name: !lambda 'return std::string(node_map_name(can_id_node(can_id)));'
+                - if:
+                    condition:
+                      lambda: 'return (id(health_edges) & HEALTH_EDGE_ERROR) != 0;'
+                    then:
+                      - homeassistant.event:
+                          event: esphome.canbus_node_error
+                          data:
+                            node_id: !lambda 'return to_string(can_id_node(can_id));'
+                            name: !lambda 'return std::string(node_map_name(can_id_node(can_id)));'
+                            # Hex like the WARN log — error_flags is a bitmask, not a count.
+                            error_flags: !lambda |-
+                              char buf[7];
+                              snprintf(buf, sizeof(buf), "0x%02X", (unsigned) payload_errors(x));
+                              return std::string(buf);
                 # Discovery: an unknown node_id heartbeating is a live, uncommissioned node —
                 # surface it to HA so the operator can identify (press its button) and commission it.
                 - if:
